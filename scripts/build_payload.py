@@ -20,8 +20,17 @@ ASSET_KEYS = ("wallpaper", "sticker", "cornerSvg", "userAvatar", "agentAvatar")
 AVATAR_KEYS = {"userAvatar", "agentAvatar"}
 AVATAR_MAX_DIM = 256
 PLACEHOLDER = "/*__THEMES_PLACEHOLDER__*/{}"
+BOOT_ASSETS_PLACEHOLDER = "/*__BOOT_ASSETS_PLACEHOLDER__*/{}"
 DEFAULT_MAX_DIM = 2560
 WEBP_QUALITY = 88
+
+
+def encode_binary_data_uri(file_path: Path, default_mime: str = "application/octet-stream") -> str:
+    raw = file_path.read_bytes()
+    mime, _ = mimetypes.guess_type(str(file_path))
+    if not mime:
+        mime = default_mime
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
 def encode_svg(svg_path: Path) -> str:
@@ -92,6 +101,8 @@ def resolve_asset_value(value: object, themes_dir: Path, max_dim: int) -> object
 
     if asset_path.suffix.lower() == ".svg":
         return encode_svg(asset_path)
+    if asset_path.suffix.lower() in (".mp4", ".webm", ".mov", ".m4v"):
+        return encode_binary_data_uri(asset_path, "video/mp4")
     return encode_raster(asset_path, max_dim)
 
 
@@ -126,6 +137,37 @@ def build_payload(themes_path: Path, engine_path: Path, out_path: Path, max_dim:
 
     themes_json = json.dumps(resolved_themes, ensure_ascii=False)
     compiled = engine_src.replace(PLACEHOLDER, themes_json, 1)
+
+    if BOOT_ASSETS_PLACEHOLDER in compiled:
+        assets_dir = themes_dir / "assets"
+        boot_assets: dict[str, str] = {}
+        candidates = {
+            "starfieldBg": assets_dir / "starfield-boot-bg.jpg",
+            "agyColorIcon": assets_dir / "agy-icon-color.png",
+            "voice1": assets_dir / "voice" / "tawa_voice1.mp3",
+            "voice2": assets_dir / "voice" / "tawa_voice2.mp3",
+            "voice3": assets_dir / "voice" / "tawa_voice3.mp3",
+            "voice4": assets_dir / "voice" / "tawa_voice4.mp3",
+            "greetingFontVi": assets_dir / "fonts" / "mali-500-vi.woff2",
+            "greetingFontLatinExt": assets_dir / "fonts" / "mali-500-latin-ext.woff2",
+            "greetingFontLatin": assets_dir / "fonts" / "mali-500-latin.woff2",
+        }
+        for key, path in candidates.items():
+            if path.is_file():
+                suffix = path.suffix.lower()
+                if suffix in (".jpg", ".jpeg", ".png", ".webp"):
+                    max_d = 1920 if key == "starfieldBg" else 256
+                    boot_assets[key] = encode_raster(path, max_d)
+                elif suffix == ".woff2":
+                    b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+                    boot_assets[key] = f"data:font/woff2;base64,{b64}"
+                else:
+                    boot_assets[key] = encode_binary_data_uri(path, "audio/mpeg")
+        compiled = compiled.replace(
+            BOOT_ASSETS_PLACEHOLDER,
+            json.dumps(boot_assets, ensure_ascii=False),
+            1,
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(compiled, encoding="utf-8")
