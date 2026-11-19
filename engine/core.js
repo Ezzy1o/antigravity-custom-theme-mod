@@ -466,27 +466,32 @@
     return [mapTok(parts[0], 0.5), mapTok(parts[1] || parts[0], 0.5)];
   }
 
-  function simplifyChainRDP(pts, epsSq) {
-    if (pts.length <= 3) return pts;
-    const keep = new Uint8Array(pts.length);
+  function simplifyChainRDPFlat(ptsX, ptsY, count, epsSq) {
+    if (count <= 3) {
+      const out = new Float32Array(count * 2);
+      for (let i = 0; i < count; i++) {
+        out[i * 2] = ptsX[i];
+        out[i * 2 + 1] = ptsY[i];
+      }
+      return out;
+    }
+    const keep = new Uint8Array(count);
     keep[0] = 1;
-    keep[pts.length - 1] = 1;
-    const stack = [[0, pts.length - 1]];
+    keep[count - 1] = 1;
+    const stack = [[0, count - 1]];
     while (stack.length > 0) {
       const [s, e] = stack.pop();
       if (e - s <= 1) continue;
-      const ax = pts[s][0];
-      const ay = pts[s][1];
-      const bx = pts[e][0];
-      const by = pts[e][1];
-      const dx = bx - ax;
-      const dy = by - ay;
+      const ax = ptsX[s];
+      const ay = ptsY[s];
+      const dx = ptsX[e] - ax;
+      const dy = ptsY[e] - ay;
       const lenSq = dx * dx + dy * dy;
       let maxD = 0;
       let maxI = -1;
       for (let i = s + 1; i < e; i++) {
-        const px = pts[i][0] - ax;
-        const py = pts[i][1] - ay;
+        const px = ptsX[i] - ax;
+        const py = ptsY[i] - ay;
         let dSq;
         if (lenSq < 1e-9) {
           dSq = px * px + py * py;
@@ -506,35 +511,27 @@
         stack.push([s, maxI], [maxI, e]);
       }
     }
-    const out = [];
-    for (let i = 0; i < pts.length; i++) {
-      if (keep[i]) out.push(pts[i]);
+    let kept = 0;
+    for (let i = 0; i < count; i++) if (keep[i]) kept++;
+    const out = new Float32Array(kept * 2);
+    let k = 0;
+    for (let i = 0; i < count; i++) {
+      if (keep[i]) {
+        out[k++] = ptsX[i];
+        out[k++] = ptsY[i];
+      }
     }
     return out;
   }
 
-  function smoothChainChaikin(pts) {
-    if (pts.length <= 2) return pts;
-    const out = new Array(pts.length);
-    out[0] = pts[0];
-    out[pts.length - 1] = pts[pts.length - 1];
-    for (let i = 1; i < pts.length - 1; i++) {
-      out[i] = [
-        0.25 * pts[i - 1][0] + 0.5 * pts[i][0] + 0.25 * pts[i + 1][0],
-        0.25 * pts[i - 1][1] + 0.5 * pts[i][1] + 0.25 * pts[i + 1][1]
-      ];
-    }
-    return out;
-  }
-
-  function extractStrokesJS(mediaEl, targetW = 1280, targetH = 800, objPosStr = '50% 50%', maxStrokes = 1100) {
+  function extractStrokesJS(mediaEl, targetW = 1280, targetH = 800, objPosStr = '50% 50%', maxStrokes = 1380) {
     const strokes = [];
     try {
       const srcW = mediaEl.videoWidth || mediaEl.naturalWidth || 0;
       const srcH = mediaEl.videoHeight || mediaEl.naturalHeight || 0;
       if (srcW > 0 && srcH > 0) {
         const viewAspect = Math.max(0.4, Math.min(3.5, targetW / Math.max(1, targetH)));
-        const w = 880;
+        const w = 920;
         const h = Math.max(240, Math.round(w / viewAspect));
         const off = document.createElement('canvas');
         off.width = w;
@@ -560,9 +557,10 @@
           off.width = 0;
           off.height = 0;
           const totalPx = w * h;
-          const mag = new Float32Array(totalPx);
+          // Uint16Array scaled x8 preserves sub-unit accuracy at half the RAM of Float32Array
+          const mag = new Uint16Array(totalPx);
           const dirBin = new Uint8Array(totalPx);
-          let maxMag = 1;
+          let maxMag = 8;
           const rowBytes = w * 4;
           for (let y = 2; y < h - 2; y++) {
             const row = y * w;
@@ -581,8 +579,8 @@
             let sB1 = data[p0 + 2] + 2 * data[p1 + 2] + data[p2 + 2], dB1 = data[p2 + 2] - data[p0 + 2];
 
             for (let x = 2; x < w - 2; x++) {
-              const rx = (x + 1) * 4;
-              const q0 = rTopBase + rx, q1 = rMidBase + rx, q2 = rBotBase + rx;
+              const rxPos = (x + 1) * 4;
+              const q0 = rTopBase + rxPos, q1 = rMidBase + rxPos, q2 = rBotBase + rxPos;
               const sR2 = data[q0] + 2 * data[q1] + data[q2], dR2 = data[q2] - data[q0];
               const sG2 = data[q0 + 1] + 2 * data[q1 + 1] + data[q2 + 1], dG2 = data[q2 + 1] - data[q0 + 1];
               const sB2 = data[q0 + 2] + 2 * data[q1 + 2] + data[q2 + 2], dB2 = data[q2 + 2] - data[q0 + 2];
@@ -605,15 +603,16 @@
               const lSq = gxL * gxL + gyL * gyL;
               const c1Sq = gx1 * gx1 + gy1 * gy1;
               const c2Sq = gx2 * gx2 + gy2 * gy2;
-              const m = Math.sqrt(lSq + 0.52 * (c1Sq + c2Sq));
+              // Stronger chroma weight preserves isoluminant anime iris boundaries (e.g. gold/pink vs white sclera)
+              const m = Math.sqrt(lSq + 0.90 * (c1Sq + c2Sq));
+              const mScaled = m > 8191 ? 65535 : Math.round(m * 8);
               const idx = row + x;
-              mag[idx] = m;
-              if (m > maxMag) maxMag = m;
+              mag[idx] = mScaled;
+              if (mScaled > maxMag) maxMag = mScaled;
 
-              // Orient NMS perpendicular to whichever channel carries the dominant local edge
               let gx = gxL, gy = gyL;
-              if (0.52 * c1Sq > lSq && c1Sq >= c2Sq) { gx = gx1; gy = gy1; }
-              else if (0.52 * c2Sq > lSq && c2Sq > c1Sq) { gx = gx2; gy = gy2; }
+              if (0.90 * c1Sq > lSq && c1Sq >= c2Sq) { gx = gx1; gy = gy1; }
+              else if (0.90 * c2Sq > lSq && c2Sq > c1Sq) { gx = gx2; gy = gy2; }
               const ax = Math.abs(gx);
               const ay = Math.abs(gy);
               if (ax > ay * 2.414) dirBin[idx] = 0;
@@ -622,17 +621,21 @@
             }
           }
 
-          // Canny Non-Maximum Suppression with 4px safe border margin to eliminate frame-edge diagonal artifacts
-          const nms = new Float32Array(totalPx);
+          // Canny NMS + 8x5 spatial tile peak tracking so soft foreground corners aren't drowned by global high-contrast areas
+          const nms = new Uint16Array(totalPx);
           const bins = new Int32Array(128);
+          const GRID_X = 8, GRID_Y = 5;
+          const tileMax = new Uint16Array(GRID_X * GRID_Y);
           let nmsCount = 0;
-          const margin = 4;
+          const margin = 3;
+          const noiseFloor = 7 * 8;
           for (let y = margin; y < h - margin; y++) {
             const row = y * w;
+            const ty = Math.min(GRID_Y - 1, Math.floor((y * GRID_Y) / h));
             for (let x = margin; x < w - margin; x++) {
               const i = row + x;
               const m = mag[i];
-              if (m < 9) continue;
+              if (m < noiseFloor) continue;
               const d = dirBin[i];
               let m1 = 0, m2 = 0;
               if (d === 0) { m1 = mag[i - 1]; m2 = mag[i + 1]; }
@@ -644,12 +647,14 @@
                 const b = Math.min(127, Math.floor((m / maxMag) * 127));
                 bins[b]++;
                 nmsCount++;
+                const tx = Math.min(GRID_X - 1, Math.floor((x * GRID_X) / w));
+                const tIdx = ty * GRID_X + tx;
+                if (m > tileMax[tIdx]) tileMax[tIdx] = m;
               }
             }
           }
 
-          // Adaptive thresholds: Pass 1 captures crisp main outlines; Pass 2 mines delicate facial & hair lines in the focal zone
-          let targetEdges = Math.max(140, Math.floor(nmsCount * 0.19));
+          let targetEdges = Math.max(140, Math.floor(nmsCount * 0.17));
           let hiBin = 22;
           for (let b = 127; b >= 1; b--) {
             targetEdges -= bins[b];
@@ -658,36 +663,63 @@
               break;
             }
           }
-          const hiThresh = Math.max(20, (hiBin / 127) * maxMag);
-          const loThresh = Math.max(10, hiThresh * 0.34);
-          const fineSeedThresh = Math.max(13, hiThresh * 0.46);
-          const fineLoThresh = Math.max(8, hiThresh * 0.23);
+          const hiThresh = Math.max(20 * 8, (hiBin / 127) * maxMag);
+          const loThresh = Math.max(10 * 8, hiThresh * 0.34);
+
+          const tileSeed = new Uint16Array(GRID_X * GRID_Y);
+          const tileFollow = new Uint16Array(GRID_X * GRID_Y);
+          for (let ty = 0; ty < GRID_Y; ty++) {
+            for (let tx = 0; tx < GRID_X; tx++) {
+              const tIdx = ty * GRID_X + tx;
+              const nx = (tx + 0.5) / GRID_X;
+              const ny = (ty + 0.5) / GRID_Y;
+              const inFocal = nx >= 0.25 && nx <= 0.75 && ny >= 0.20 && ny <= 0.78;
+              const tmax = tileMax[tIdx];
+              const minFloor = inFocal ? 22 * 8 : 26 * 8;
+              const adaptCap = inFocal ? hiThresh * 0.30 : hiThresh * 0.34;
+              const seed = tmax < minFloor ? 65535 : Math.max(minFloor, Math.min(adaptCap, tmax * 0.20));
+              tileSeed[tIdx] = Math.round(seed);
+              tileFollow[tIdx] = Math.max(7 * 8, Math.round(seed * 0.42));
+            }
+          }
 
           const visited = dirBin;
           visited.fill(0);
           const dirs = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
           const candidates = [];
 
-          function traceHalf(startX, startY, initDx, initDy, minEdge, maxSteps) {
-            const pts = [];
-            let cx = startX, cy = startY, prevDx = initDx, prevDy = initDy, steps = 0, energy = 0;
-            while (steps < maxSteps) {
+          // Reusable flat typed scratch buffers prevent creating tens of thousands of [x, y] tuples during tracing
+          const MAX_HALF = 140;
+          const fwdX = new Int16Array(MAX_HALF);
+          const fwdY = new Int16Array(MAX_HALF);
+          const revX = new Int16Array(MAX_HALF);
+          const revY = new Int16Array(MAX_HALF);
+          const chainX = new Float32Array(MAX_HALF * 2 + 2);
+          const chainY = new Float32Array(MAX_HALF * 2 + 2);
+          const smX = new Float32Array(MAX_HALF * 2 + 2);
+          const smY = new Float32Array(MAX_HALF * 2 + 2);
+
+          function traceHalf(startX, startY, initDx, initDy, minEdge, outX, outY) {
+            let cx = startX, cy = startY;
+            let tanX = initDx, tanY = initDy;
+            let steps = 0, energy = 0;
+            while (steps < MAX_HALF) {
               let bestX = -1, bestY = -1, bestScore = -1;
+              const tanLen = (tanX === 0 && tanY === 0) ? 0 : Math.hypot(tanX, tanY);
               for (let d = 0; d < 8; d++) {
                 const dx = dirs[d][0];
                 const dy = dirs[d][1];
-                const dot = (prevDx === 0 && prevDy === 0) ? 1 : (dx * prevDx + dy * prevDy);
-                // Break cleanly instead of fusing crossing contours at sharp acute turns
-                if (prevDx !== 0 || prevDy !== 0) {
-                  if (dot < 0) continue;
-                }
+                const dot = tanLen === 0 ? 1 : (dx * tanX + dy * tanY);
+                // Smoothed EMA tangent keeps curved eye irises & circles continuous across 1px raster steps without U-turns
+                if (tanLen > 0 && dot < -0.18 * tanLen) continue;
                 const nx = cx + dx;
                 const ny = cy + dy;
                 if (nx < margin || nx >= w - margin || ny < margin || ny >= h - margin) continue;
                 const ni = ny * w + nx;
-                if (visited[ni] || nms[ni] < minEdge) continue;
-                const align = (prevDx === 0 && prevDy === 0) ? 1.0 : (1.0 + 0.55 * (dot / Math.hypot(prevDx, prevDy)));
-                const sc = nms[ni] * align;
+                const nVal = nms[ni];
+                if (visited[ni] || nVal < minEdge) continue;
+                const align = tanLen === 0 ? 1.0 : (1.0 + 0.55 * (dot / tanLen));
+                const sc = nVal * align;
                 if (sc > bestScore) {
                   bestScore = sc;
                   bestX = nx;
@@ -695,11 +727,9 @@
                 }
               }
 
-              // Conservative 1px gap bridge strictly along current tangent to keep eyelashes & chin curves continuous
-              if (bestX < 0 && (prevDx !== 0 || prevDy !== 0)) {
-                const pLen = Math.hypot(prevDx, prevDy) || 1;
-                const ux = Math.round(prevDx / pLen);
-                const uy = Math.round(prevDy / pLen);
+              if (bestX < 0 && tanLen > 0) {
+                const ux = Math.round(tanX / tanLen);
+                const uy = Math.round(tanY / tanLen);
                 const gx2 = cx + ux * 2;
                 const gy2 = cy + uy * 2;
                 if (gx2 >= margin && gx2 < w - margin && gy2 >= margin && gy2 < h - margin) {
@@ -714,74 +744,126 @@
               if (bestX < 0) break;
               const bi = bestY * w + bestX;
               visited[bi] = 1;
-              pts.push([bestX, bestY]);
+              outX[steps] = bestX;
+              outY[steps] = bestY;
               energy += nms[bi];
-              prevDx = bestX - cx;
-              prevDy = bestY - cy;
+              const stepX = bestX - cx;
+              const stepY = bestY - cy;
+              tanX = tanLen === 0 ? stepX : (tanX * 0.52 + stepX * 0.48);
+              tanY = tanLen === 0 ? stepY : (tanY * 0.52 + stepY * 0.48);
               cx = bestX;
               cy = bestY;
               steps++;
             }
-            return { pts, energy };
+            return { len: steps, energy };
           }
 
-          function collectChains(seedThresh, followThresh, focalOnly) {
+          function collectPass(mode) {
             for (let y = margin; y < h - margin; y++) {
-              const nySeed = y / h;
-              if (focalOnly && (nySeed < 0.08 || nySeed > 0.88)) continue;
+              const ty = Math.min(GRID_Y - 1, Math.floor((y * GRID_Y) / h));
               for (let x = margin; x < w - margin; x++) {
-                if (focalOnly) {
-                  const nxSeed = x / w;
-                  if (nxSeed < 0.16 || nxSeed > 0.84) continue;
-                }
                 const sIdx = y * w + x;
-                if (visited[sIdx] || nms[sIdx] < seedThresh) continue;
+                if (visited[sIdx]) continue;
+                const val = nms[sIdx];
+                let seedThresh, followThresh;
+                if (mode === 1) {
+                  const tx = Math.min(GRID_X - 1, Math.floor((x * GRID_X) / w));
+                  const tIdx = ty * GRID_X + tx;
+                  seedThresh = tileSeed[tIdx];
+                  followThresh = tileFollow[tIdx];
+                } else if (mode === 2) {
+                  seedThresh = 21 * 8;
+                  followThresh = 9 * 8;
+                } else {
+                  seedThresh = hiThresh;
+                  followThresh = loThresh;
+                }
+                if (val < seedThresh) continue;
 
                 visited[sIdx] = 1;
-                const fwd = traceHalf(x, y, 0, 0, followThresh, 130);
-                let rev = { pts: [], energy: 0 };
-                if (fwd.pts.length > 0) {
-                  const initDx = x - fwd.pts[0][0];
-                  const initDy = y - fwd.pts[0][1];
-                  rev = traceHalf(x, y, initDx, initDy, followThresh, 130);
+                const fwd = traceHalf(x, y, 0, 0, followThresh, fwdX, fwdY);
+                let rev = { len: 0, energy: 0 };
+                if (fwd.len > 0) {
+                  const initDx = x - fwdX[0];
+                  const initDy = y - fwdY[0];
+                  rev = traceHalf(x, y, initDx, initDy, followThresh, revX, revY);
                 }
 
-                const rawPts = [];
-                for (let i = rev.pts.length - 1; i >= 0; i--) rawPts.push(rev.pts[i]);
-                rawPts.push([x, y]);
-                for (let i = 0; i < fwd.pts.length; i++) rawPts.push(fwd.pts[i]);
+                const totalLen = rev.len + 1 + fwd.len;
+                const totalEnergy = val + fwd.energy + rev.energy;
+                const avgEnergy = totalEnergy / totalLen;
 
-                const minLen = focalOnly ? 4 : 5;
-                if (rawPts.length >= minLen) {
-                  const smoothed = smoothChainChaikin(rawPts);
-                  const simp = simplifyChainRDP(smoothed, 0.48);
-                  if (simp.length >= 2) {
-                    const totalEnergy = nms[sIdx] + fwd.energy + rev.energy;
-                    const avgEnergy = totalEnergy / rawPts.length;
-                    const mid = simp[Math.floor(simp.length / 2)];
-                    const nx = mid[0] / w;
-                    const ny = mid[1] / h;
-                    const distSq = (nx - 0.5) * (nx - 0.5) * 1.45 + (ny - 0.43) * (ny - 0.43) * 1.65;
-                    const centerBias = 0.32 + 2.8 * Math.exp(-distSq / 0.17);
-                    const normPts = simp.map(([px, py]) => [px / w, py / h]);
-                    normPts.w = Math.max(0.15, Math.min(1, avgEnergy / Math.max(1, hiThresh * 1.55)));
-                    candidates.push({
-                      pts: normPts,
-                      score: avgEnergy * Math.pow(rawPts.length, 0.45) * centerBias,
-                      distCenter: Math.hypot(nx - 0.5, ny - 0.43)
-                    });
-                  }
+                // Mode 2 mines long coherent low-contrast curves (white-on-snow silhouettes, soft jawlines) while ignoring short grain
+                if (mode === 2) {
+                  if (totalLen < 18) continue;
+                } else {
+                  const crispDotFloor = Math.max(48 * 8, hiThresh * 0.50);
+                  const minLen = (avgEnergy >= crispDotFloor) ? 3 : 6;
+                  if (totalLen < minLen) continue;
                 }
+
+                let p = 0;
+                for (let i = rev.len - 1; i >= 0; i--) { chainX[p] = revX[i]; chainY[p] = revY[i]; p++; }
+                chainX[p] = x; chainY[p] = y; p++;
+                for (let i = 0; i < fwd.len; i++) { chainX[p] = fwdX[i]; chainY[p] = fwdY[i]; p++; }
+
+                smX[0] = chainX[0]; smY[0] = chainY[0];
+                smX[totalLen - 1] = chainX[totalLen - 1]; smY[totalLen - 1] = chainY[totalLen - 1];
+                for (let i = 1; i < totalLen - 1; i++) {
+                  smX[i] = 0.25 * chainX[i - 1] + 0.5 * chainX[i] + 0.25 * chainX[i + 1];
+                  smY[i] = 0.25 * chainY[i - 1] + 0.5 * chainY[i] + 0.25 * chainY[i + 1];
+                }
+
+                const flatPx = simplifyChainRDPFlat(smX, smY, totalLen, 0.68);
+                const vertCount = flatPx.length / 2;
+                if (vertCount < 2) continue;
+
+                for (let i = 0; i < flatPx.length; i += 2) {
+                  flatPx[i] /= w;
+                  flatPx[i + 1] /= h;
+                }
+                const midIdx = Math.floor(vertCount / 2) * 2;
+                const nx = flatPx[midIdx];
+                const ny = flatPx[midIdx + 1];
+                const distSq = (nx - 0.5) * (nx - 0.5) * 1.3 + (ny - 0.45) * (ny - 0.45) * 1.4;
+                const gentleBias = 0.68 + 0.70 * Math.exp(-distSq / 0.22);
+                const eyeFocusBoost = (nx >= 0.34 && nx <= 0.66 && ny >= 0.32 && ny <= 0.60 && totalLen <= 18) ? 1.38 : 1.0;
+                flatPx.w = Math.max(0.18, Math.min(1, avgEnergy / Math.max(1, hiThresh * 1.45)));
+
+                const cTx = Math.min(GRID_X - 1, Math.floor(nx * GRID_X));
+                const cTy = Math.min(GRID_Y - 1, Math.floor(ny * GRID_Y));
+                candidates.push({
+                  pts: flatPx,
+                  score: avgEnergy * Math.pow(totalLen, 0.72) * gentleBias * eyeFocusBoost,
+                  distCenter: Math.hypot(nx - 0.5, ny - 0.43),
+                  cell: cTy * GRID_X + cTx
+                });
               }
             }
           }
 
-          collectChains(hiThresh, loThresh, false);
-          collectChains(fineSeedThresh, fineLoThresh, true);
+          collectPass(0);
+          collectPass(1);
+          collectPass(2);
 
           candidates.sort((a, b) => b.score - a.score);
-          const picked = candidates.slice(0, maxStrokes);
-          // Artist reveal order: draw central facial features first, then hair & surroundings outward
+          const picked = [];
+          const usedIdx = new Uint8Array(candidates.length);
+          const cellCounts = new Int32Array(GRID_X * GRID_Y);
+          const cellQuota = Math.max(12, Math.floor((maxStrokes * 0.60) / (GRID_X * GRID_Y)));
+
+          for (let i = 0; i < candidates.length && picked.length < maxStrokes; i++) {
+            const c = candidates[i];
+            if (cellCounts[c.cell] < cellQuota) {
+              cellCounts[c.cell]++;
+              usedIdx[i] = 1;
+              picked.push(c);
+            }
+          }
+          for (let i = 0; i < candidates.length && picked.length < maxStrokes; i++) {
+            if (!usedIdx[i]) picked.push(candidates[i]);
+          }
+
           picked.sort((a, b) => a.distCenter - b.distCenter);
           for (let i = 0; i < picked.length; i++) {
             strokes.push(picked[i].pts);
@@ -797,11 +879,13 @@
         const by = 0.16 + 0.68 * ((i * 53) % 100) / 100;
         const len = 0.08 + 0.14 * Math.sin(t * Math.PI);
         const ang = (i * 0.7) % Math.PI;
-        strokes.push([
-          [bx, by],
-          [bx + Math.cos(ang) * len * 0.5, by + Math.sin(ang) * len * 0.5 - 0.03],
-          [bx + Math.cos(ang) * len, by + Math.sin(ang) * len]
+        const fallback = new Float32Array([
+          bx, by,
+          bx + Math.cos(ang) * len * 0.5, by + Math.sin(ang) * len * 0.5 - 0.03,
+          bx + Math.cos(ang) * len, by + Math.sin(ang) * len
         ]);
+        fallback.w = 0.65;
+        strokes.push(fallback);
       }
     }
     return strokes;
@@ -875,7 +959,7 @@
     layer.style.background = '#06080e';
     canvas.style.display = 'block';
     const rect = (shell || layer).getBoundingClientRect();
-    const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
     const cw = Math.max(320, Math.round((rect.width || window.innerWidth) * dpr));
     const ch = Math.max(240, Math.round((rect.height || window.innerHeight) * dpr));
     if (canvas.width !== cw || canvas.height !== ch) {
@@ -890,7 +974,7 @@
       ? videoEl
       : (imgEl && imgEl.complete && imgEl.naturalWidth > 0 ? imgEl : null);
     const objPos = activeMedia ? (getComputedStyle(activeMedia).objectPosition || '50% 50%') : '50% 50%';
-    const strokes = activeMedia ? extractStrokesJS(activeMedia, rect.width || window.innerWidth, rect.height || window.innerHeight, objPos) : extractStrokesJS({});
+    let strokes = activeMedia ? extractStrokesJS(activeMedia, rect.width || window.innerWidth, rect.height || window.innerHeight, objPos, 1380) : extractStrokesJS({});
     const seeds = createBloomSeeds();
 
     let cacheCanvas = document.createElement('canvas');
@@ -907,6 +991,7 @@
     let fullCacheReady = false;
 
     window.__AGY_REVEAL_CLEANUP__ = () => {
+      strokes = null;
       if (cacheCanvas) {
         cacheCanvas.width = 0;
         cacheCanvas.height = 0;
@@ -920,8 +1005,8 @@
       }
     };
 
-    mediaWrap.style.webkitMaskImage = 'linear-gradient(transparent, transparent)';
-    mediaWrap.style.maskImage = 'linear-gradient(transparent, transparent)';
+    mediaWrap.style.webkitMaskImage = 'none';
+    mediaWrap.style.maskImage = 'none';
     if (isVideoMode && videoEl && videoEl.paused && videoEl.src) {
       videoEl.play().catch(() => {});
     }
@@ -931,45 +1016,48 @@
     const start = performance.now();
 
     function strokeOnePath(targetCtx, pts, wFactor, isFresh) {
-      if (!pts || pts.length < 2) return;
+      if (!pts || pts.length < 4) return;
+      const vertCount = pts.length >> 1;
       const alpha = isFresh ? 0.96 : (0.48 + 0.40 * wFactor);
       targetCtx.strokeStyle = isFresh ? `rgba(255, 255, 255, ${alpha})` : `rgba(232, 239, 252, ${alpha.toFixed(2)})`;
       targetCtx.lineWidth = (0.64 + 0.78 * wFactor) * dpr;
       targetCtx.beginPath();
-      targetCtx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
-      if (pts.length === 2) {
-        targetCtx.lineTo(pts[1][0] * cw, pts[1][1] * ch);
+      targetCtx.moveTo(pts[0] * cw, pts[1] * ch);
+      if (vertCount === 2) {
+        targetCtx.lineTo(pts[2] * cw, pts[3] * ch);
       } else {
-        for (let k = 1; k < pts.length - 1; k++) {
-          const xk = pts[k][0] * cw;
-          const yk = pts[k][1] * ch;
-          const mx = (xk + pts[k + 1][0] * cw) * 0.5;
-          const my = (yk + pts[k + 1][1] * ch) * 0.5;
+        for (let k = 1; k < vertCount - 1; k++) {
+          const xk = pts[k * 2] * cw;
+          const yk = pts[k * 2 + 1] * ch;
+          const mx = (xk + pts[k * 2 + 2] * cw) * 0.5;
+          const my = (yk + pts[k * 2 + 3] * ch) * 0.5;
           targetCtx.quadraticCurveTo(xk, yk, mx, my);
         }
-        const last = pts[pts.length - 1];
-        targetCtx.lineTo(last[0] * cw, last[1] * ch);
+        const lastOff = (vertCount - 1) * 2;
+        targetCtx.lineTo(pts[lastOff] * cw, pts[lastOff + 1] * ch);
       }
       targetCtx.stroke();
     }
 
     function drawStrokesProgress(p) {
-      const count = p >= 1 ? strokes.length : Math.max(1, Math.floor(strokes.length * p));
+      const total = strokes ? strokes.length : 0;
+      const count = p >= 1 ? total : Math.max(1, Math.floor(total * p));
       if (cacheCtx && cacheCanvas) {
         if (p >= 1) {
-          if (!fullCacheReady) {
-            for (let i = drawnSettled; i < strokes.length; i++) {
+          if (!fullCacheReady && strokes) {
+            for (let i = drawnSettled; i < total; i++) {
               const pts = strokes[i];
               const wFactor = (pts && typeof pts.w === 'number') ? pts.w : 0.6;
               strokeOnePath(cacheCtx, pts, wFactor, false);
             }
-            drawnSettled = strokes.length;
+            drawnSettled = total;
             fullCacheReady = true;
           }
           ctx.clearRect(0, 0, cw, ch);
           ctx.drawImage(cacheCanvas, 0, 0);
           return;
         }
+        if (!strokes) return;
         const settleLimit = Math.max(0, count - 18);
         while (drawnSettled < settleLimit) {
           const pts = strokes[drawnSettled];
@@ -994,6 +1082,7 @@
       ctx.clearRect(0, 0, cw, ch);
       ctx.fillStyle = '#06080e';
       ctx.fillRect(0, 0, cw, ch);
+      if (!strokes) return;
       ctx.save();
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
@@ -1009,7 +1098,6 @@
       const diag = Math.hypot(cw, ch);
       ctx.save();
       ctx.globalCompositeOperation = 'destination-out';
-      const layers = [];
       for (let i = 0; i < seeds.length; i++) {
         const sd = seeds[i];
         const raw = (bp - sd.delay) / (1 - sd.delay);
@@ -1027,18 +1115,11 @@
         ctx.beginPath();
         ctx.arc(cx, cy, rad, 0, Math.PI * 2);
         ctx.fill();
-
-        const outer = eased * 68;
-        const inner = Math.max(0, outer * 0.52);
-        layers.push(
-          `radial-gradient(circle at ${sd.x.toFixed(1)}% ${sd.y.toFixed(1)}%, #000 ${inner.toFixed(1)}%, rgba(0,0,0,0.82) ${(outer * 0.78).toFixed(1)}%, transparent ${outer.toFixed(1)}%)`
-        );
       }
       ctx.restore();
-      const maskVal = layers.length ? layers.join(', ') : 'linear-gradient(transparent, transparent)';
-      mediaWrap.style.webkitMaskImage = maskVal;
-      mediaWrap.style.maskImage = maskVal;
     }
+
+    drawStrokesProgress(0.01);
 
     function step(now) {
       const elapsed = now - start;
@@ -1047,6 +1128,7 @@
       } else {
         const bp = Math.min(1, (elapsed - sketchDur) / bloomDur);
         drawStrokesProgress(1);
+        if (fullCacheReady) strokes = null;
         applySeedBloom(bp);
       }
       if (elapsed < sketchDur + bloomDur) {
