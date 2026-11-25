@@ -1,12 +1,12 @@
 # PROGRESS — Antigravity Custom Theme Engine (Tawa Rust Edition)
 
-## Phase Hiện Tại: **P1 — `engine/core.js` Perf, FPS & DOM Fixes (HOÀN TẤT — Chờ duyệt sang P2)**
+## Phase Hiện Tại: **P2 — Rust Core (`builder`, `cdp`, `ws`, `config`, `sys`, `paths`, `md5`) (HOÀN TẤT — Chờ duyệt sang P3)**
 
 | Phase | Trạng Thái | Commit Hash | Bằng Chứng Nghiệm Thu |
 | :--- | :--- | :--- | :--- |
 | P0 Scaffold & Media Dedup | 🟢 Hoàn tất | `ba66a86` | `AGENTS.md`, `DECISIONS.md`, `PROGRESS.md`, `.gitignore` (`target/`, `*.exe`, `*.pdb`); xóa 6 MP4 trùng MD5 thu hồi `50,940,452 bytes` (`48.58 MB`), còn `10/10` file tham chiếu nguyên vẹn, `0` bản trùng lặp. |
-| P1 `engine/core.js` Perf, FPS & DOM Fixes | 🟢 Hoàn tất | Pending P1 commit | Static audit `engine/core.js` (`4,727` dòng, `221,608 bytes`): `0` `:has()`, `0` `backdrop-filter: blur(...)`, `node --check` PASS. Build `dist/theme_payload.js` (`1744.2 KB`) + hot-reload vào Antigravity thật, `node scripts/verify_cdp.js` PASS `1/1`: `styleBytes` giảm `53,020` → `22,610 bytes`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `styleHasLiveBlur: false`, `modalHasLiveBlur: false`, `settingsTriggerPresent: true`, `composerPresent: true`. |
-| P2 Rust Core (`builder`, `cdp`, `ws`, `config`, `sys`, `paths`) | ⚪ Chờ duyệt | - | Chưa bắt đầu |
+| P1 `engine/core.js` Perf, FPS & DOM Fixes | 🟢 Hoàn tất | `c026887` | Static audit `engine/core.js` (`4,727` dòng, `221,608 bytes`): `0` `:has()`, `0` `backdrop-filter: blur(...)`, `node --check` PASS. Build `dist/theme_payload.js` (`1744.2 KB`) + hot-reload vào Antigravity thật, `node scripts/verify_cdp.js` PASS `1/1`: `styleBytes` giảm `53,020` → `22,610 bytes`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `styleHasLiveBlur: false`, `modalHasLiveBlur: false`, `settingsTriggerPresent: true`, `composerPresent: true`. |
+| P2 Rust Core (`builder`, `cdp`, `ws`, `config`, `sys`, `paths`, `md5`) | 🟢 Hoàn tất | Pending P2 commit | `cargo test -- --nocapture` biên dịch sạch 0 warning (`2.18s`), **12 passed; 0 failed** (`0.07s`): RFC 1321 + streaming MD5 64 KiB, atomic config merge, Win32 PID/memory/trim, RFC 6455 WS loopback fragment+ping/pong, CDP filter chặn `http://127.0.0.1:8787` & `8789`, Lazy HTTP builder biên dịch **4 theme** thành `285,252 bytes` (`278.6 KB`, giảm 6.26× so với `1,786,039 bytes`) trong **`4 ms`** và `node --check` PASS. |
 | P3 Rust Media Server, `daemon`, `installer`, CLI & Launcher | ⚪ Chờ duyệt | - | Chưa bắt đầu |
 | P4 Release Build, Cutover, Live CDP Verify & Cleanup | ⚪ Chờ duyệt | - | Chưa bắt đầu |
 
@@ -30,8 +30,8 @@
 - **P4:** Biên dịch `cargo build --release`, hoàn thiện `tests/integration_tests.rs`, cắt chuyển Node daemon -> Rust daemon, chạy `agy-theme verify` trên Antigravity thật, xóa code Node/Python/VBS cũ (`daemon/theme_daemon.js`, `scripts/build_payload.py`, `scripts/uninstall.js`, `scripts/verify_cdp.js`, `silent-start.vbs`), cập nhật `README.md` & `TAWA_MOD_NOTES.md`, đo benchmark RAM/Payload/FPS thực tế.
 
 ## Nhật Ký Handoff Giữa Các Phiên (5 Dòng Tiêu Chuẩn)
-- **Phiên gần nhất hoàn tất:** Phase P1 — Tối ưu `engine/core.js` & cập nhật `scripts/verify_cdp.js`.
-- **Đã làm xong:** Bỏ `syncShellMetrics()` khỏi mỗi tick AI stream (chỉ chạy khi đổi shell/hole/side-panel/ResizeObserver); đạt `0 :has()` và `0 live backdrop-filter`; đổi `wpUrl`/avatars/prebaked glass sang `blob:` URL (giảm `<style>` từ `53,020` xuống `22,610 bytes`); debounce save (`200ms`) + glass (`80ms`) + `skipSave`; pause video nền khi `document.hidden`; hỗ trợ Lazy HTTP cho `BOOT_ASSETS` + stickers; sửa `injectMainSidebarButton()` (`settingsTriggerPresent: true`); gắn `keydown` modal bằng `AbortController`.
-- **File bị biến đổi:** `engine/core.js`, `scripts/verify_cdp.js`, `PROGRESS.md` (và rebuild `dist/theme_payload.js` gitignored).
-- **Việc phiên tới cần làm ngay:** Bắt đầu **P2** — khởi tạo `Cargo.toml` và viết các module Rust lõi (`src/lib.rs`, `src/paths.rs`, `src/sys.rs`, `src/config.rs`, `src/ws.rs`, `src/cdp.rs`, `src/builder.rs`) kèm `cargo test` PASS 100%.
-- **Cảnh báo rủi ro:** Rust `builder.rs` phải sinh `dist/theme_payload.js` theo chiến lược Lazy HTTP (D3: chỉ inline SVG nhỏ + Mali WOFF2 fonts, giữ nguyên placeholder `/*__THEMES_PLACEHOLDER__*/{}` và `/*__BOOT_ASSETS_PLACEHOLDER__*/{}`), đồng thời giữ nguyên Node daemon `PID 16072` đến cổng cutover P4.
+- **Phiên gần nhất hoàn tất:** Phase P2 — Hoàn thiện Rust Core Crate (`agy_theme`) & 12 unit tests PASS 100%.
+- **Đã làm xong:** Viết `Cargo.toml` và 8 module (`src/lib.rs`, `src/md5.rs`, `src/paths.rs`, `src/config.rs`, `src/sys.rs`, `src/ws.rs`, `src/cdp.rs`, `src/builder.rs`); `cargo test` PASS 12/12; kiểm chứng Lazy HTTP payload `285,252 bytes` (`278.6 KB`) build trong `4 ms`, `node --check` PASS.
+- **File bị biến đổi:** `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/md5.rs`, `src/paths.rs`, `src/config.rs`, `src/sys.rs`, `src/ws.rs`, `src/cdp.rs`, `src/builder.rs`, `PROGRESS.md`.
+- **Việc phiên tới cần làm ngay:** Bắt đầu **P3** — bổ sung `[[bin]]` trong `Cargo.toml`, viết `src/media.rs` (HTTP Media Server thuần `std::net::TcpListener`, streaming `Range 206`, `/assets/*`, `/user_media/*`, `/user_media_list`, `/upload` 64 KiB streaming MD5 dedup, `/delete_media`), `src/daemon.rs`, `src/bin/daemon.rs`, `src/installer.rs`, `src/main.rs`, `agy-theme.bat`, `scripts/install-win.ps1`.
+- **Cảnh báo rủi ro:** `src/media.rs` cần giữ nguyên hợp đồng JSON với `engine/core.js` (`/user_media_list`, `/upload?name=...`, `/delete_media` với field `url`/`fileName`/`name`) và xử lý HTTP `Range` đúng cho `<video>` MP4; giữ nguyên Node daemon `PID 16072` đến P4 cutover.
