@@ -582,6 +582,10 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
                         );
                     }
                 }
+            } else if last_port.is_some() {
+                close_all_sessions(&sessions);
+                last_port = None;
+                trim_working_set();
             }
         }
 
