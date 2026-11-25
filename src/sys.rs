@@ -184,23 +184,44 @@ pub fn trim_working_set() {
 pub fn trim_working_set() {}
 
 pub fn spawn_detached(exe: &Path, args: &[&str], workdir: &Path) -> Result<u32> {
-    let mut cmd = Command::new(exe);
-    cmd.args(args)
-        .current_dir(workdir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+
+        let make_cmd = |flags: u32| {
+            let mut cmd = Command::new(exe);
+            cmd.args(args)
+                .current_dir(workdir)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(flags);
+            cmd
+        };
+
+        let base_flags = CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+        let child = match make_cmd(base_flags | CREATE_BREAKAWAY_FROM_JOB).spawn() {
+            Ok(c) => c,
+            Err(_) => make_cmd(base_flags).spawn()?,
+        };
+        Ok(child.id())
     }
 
-    let child = cmd.spawn()?;
-    Ok(child.id())
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new(exe);
+        cmd.args(args)
+            .current_dir(workdir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = cmd.spawn()?;
+        Ok(child.id())
+    }
 }
 
 #[cfg(test)]

@@ -48,6 +48,69 @@ pub fn stop_daemon(paths: &AppPaths) -> Result<Option<u32>> {
     Ok(stopped)
 }
 
+#[cfg(windows)]
+fn decode_schtasks_xml(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else if bytes.len() >= 4 && bytes[1] == 0 && bytes[3] == 0 {
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+
+#[cfg(windows)]
+fn try_start_via_windows_task(paths: &AppPaths, daemon_exe: &std::path::Path) -> Option<u32> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    if std::env::var_os("AGY_NO_SCHTASKS").is_some() {
+        return None;
+    }
+
+    let query = Command::new("schtasks.exe")
+        .args(["/query", "/tn", WIN_TASK_NAME, "/xml"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !query.status.success() {
+        return None;
+    }
+
+    let xml_lower = decode_schtasks_xml(&query.stdout).to_lowercase();
+    let daemon_lower = daemon_exe.to_string_lossy().to_lowercase();
+    let root_lower = paths.root.to_string_lossy().to_lowercase();
+    if !xml_lower.contains(&daemon_lower) || !xml_lower.contains(&root_lower) {
+        return None;
+    }
+
+    let run = Command::new("schtasks.exe")
+        .args(["/run", "/tn", WIN_TASK_NAME])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !run.status.success() {
+        return None;
+    }
+
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(150));
+        if let Some(pid) = read_running_pid(paths) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
 pub fn start_daemon(paths: &AppPaths, watch_themes: bool) -> Result<u32> {
     if !paths.payload_js.is_file() {
         println!("[agy-theme] dist/theme_payload.js missing; building payload...");
@@ -69,6 +132,13 @@ pub fn start_daemon(paths: &AppPaths, watch_themes: bool) -> Result<u32> {
     }
 
     let daemon_exe = resolve_daemon_exe();
+    #[cfg(windows)]
+    if !watch_themes {
+        if let Some(pid) = try_start_via_windows_task(paths, &daemon_exe) {
+            return Ok(pid);
+        }
+    }
+
     let root_str = paths.root.to_string_lossy().to_string();
     let is_dedicated_daemon = daemon_exe
         .file_stem()
