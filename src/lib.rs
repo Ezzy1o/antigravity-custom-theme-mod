@@ -1,7 +1,10 @@
 pub mod builder;
 pub mod cdp;
 pub mod config;
+pub mod daemon;
+pub mod installer;
 pub mod md5;
+pub mod media;
 pub mod paths;
 pub mod sys;
 pub mod ws;

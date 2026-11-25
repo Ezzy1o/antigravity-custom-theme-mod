@@ -9,6 +9,14 @@ license = "MIT"
 name = "agy_theme"
 path = "src/lib.rs"
 
+[[bin]]
+name = "agy-theme"
+path = "src/main.rs"
+
+[[bin]]
+name = "agy-theme-daemon"
+path = "src/bin/daemon.rs"
+
 [dependencies]
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
