@@ -1,5 +1,8 @@
 # Build & runtime outputs
 dist/
+target/
+*.exe
+*.pdb
 daemon.log
 daemon.pid
 theme_config.json
