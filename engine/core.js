@@ -556,6 +556,7 @@
     }
     const ms = window.__AGY_METRICS_STATE__ || (window.__AGY_METRICS_STATE__ = { glassBg: '', beforeClip: '', holeClip: '' });
     if (!wpUrl) {
+      window.__AGY_BLUR_GEN__ = (window.__AGY_BLUR_GEN__ || 0) + 1;
       ms.glassBg = '';
       flushMetricsStyle();
       return;
@@ -1476,7 +1477,7 @@
     if (useUnifiedGlass && typeof hookShellMetrics === 'function') {
       hookShellMetrics(true);
     }
-    if (useUnifiedGlass) {
+    if (useUnifiedGlass && !isVideoMode) {
       syncPrebakedGlass(wpUrl, overlayRgb, overlayAlpha, mainTheme.headerBg || '', effectiveBlur, opts.debounceSave ? 80 : 0);
     } else {
       syncPrebakedGlass(null);
