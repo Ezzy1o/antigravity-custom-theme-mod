@@ -1,11 +1,11 @@
 # PROGRESS — Antigravity Custom Theme Engine (Tawa Rust Edition)
 
-## Phase Hiện Tại: **P0 — Scaffold, Baseline Recon & Media Deduplication (HOÀN TẤT — Chờ duyệt sang P1)**
+## Phase Hiện Tại: **P1 — `engine/core.js` Perf, FPS & DOM Fixes (HOÀN TẤT — Chờ duyệt sang P2)**
 
 | Phase | Trạng Thái | Commit Hash | Bằng Chứng Nghiệm Thu |
 | :--- | :--- | :--- | :--- |
-| P0 Scaffold & Media Dedup | 🟢 Hoàn tất | Pending P0 commit | `AGENTS.md`, `DECISIONS.md`, `PROGRESS.md`, `.gitignore` (`target/`, `*.exe`, `*.pdb`); xóa 6 MP4 trùng MD5 thu hồi `50,940,452 bytes` (`48.58 MB`), còn `10/10` file tham chiếu nguyên vẹn, `0` bản trùng lặp. |
-| P1 `engine/core.js` Perf, FPS & DOM Fixes | ⚪ Chờ duyệt | - | Chưa bắt đầu |
+| P0 Scaffold & Media Dedup | 🟢 Hoàn tất | `ba66a86` | `AGENTS.md`, `DECISIONS.md`, `PROGRESS.md`, `.gitignore` (`target/`, `*.exe`, `*.pdb`); xóa 6 MP4 trùng MD5 thu hồi `50,940,452 bytes` (`48.58 MB`), còn `10/10` file tham chiếu nguyên vẹn, `0` bản trùng lặp. |
+| P1 `engine/core.js` Perf, FPS & DOM Fixes | 🟢 Hoàn tất | Pending P1 commit | Static audit `engine/core.js` (`4,727` dòng, `221,608 bytes`): `0` `:has()`, `0` `backdrop-filter: blur(...)`, `node --check` PASS. Build `dist/theme_payload.js` (`1744.2 KB`) + hot-reload vào Antigravity thật, `node scripts/verify_cdp.js` PASS `1/1`: `styleBytes` giảm `53,020` → `22,610 bytes`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `styleHasLiveBlur: false`, `modalHasLiveBlur: false`, `settingsTriggerPresent: true`, `composerPresent: true`. |
 | P2 Rust Core (`builder`, `cdp`, `ws`, `config`, `sys`, `paths`) | ⚪ Chờ duyệt | - | Chưa bắt đầu |
 | P3 Rust Media Server, `daemon`, `installer`, CLI & Launcher | ⚪ Chờ duyệt | - | Chưa bắt đầu |
 | P4 Release Build, Cutover, Live CDP Verify & Cleanup | ⚪ Chờ duyệt | - | Chưa bắt đầu |
@@ -30,8 +30,8 @@
 - **P4:** Biên dịch `cargo build --release`, hoàn thiện `tests/integration_tests.rs`, cắt chuyển Node daemon -> Rust daemon, chạy `agy-theme verify` trên Antigravity thật, xóa code Node/Python/VBS cũ (`daemon/theme_daemon.js`, `scripts/build_payload.py`, `scripts/uninstall.js`, `scripts/verify_cdp.js`, `silent-start.vbs`), cập nhật `README.md` & `TAWA_MOD_NOTES.md`, đo benchmark RAM/Payload/FPS thực tế.
 
 ## Nhật Ký Handoff Giữa Các Phiên (5 Dòng Tiêu Chuẩn)
-- **Phiên gần nhất hoàn tất:** Phase P0 — Thiết lập bộ khung `skill_project_scaffold` (Tier 2) và dọn trùng lặp `themes/user_media/`.
-- **Đã làm xong:** Tạo `AGENTS.md`, `DECISIONS.md`, `PROGRESS.md`; cập nhật `.gitignore`; xóa 6 MP4 trùng MD5 (`48.58 MB`), giữ nguyên `10/10` file tham chiếu.
-- **File bị biến đổi:** `.gitignore`, `AGENTS.md`, `DECISIONS.md`, `PROGRESS.md` (cùng 6 file trùng gitignored trong `themes/user_media/`).
-- **Việc phiên tới cần làm ngay:** Bắt đầu **P1** trên `engine/core.js` (xử lý các điểm nóng tại L396 `syncPrebakedGlass`, L2130 `agySaveThemeConfig`, L2466–2506 `:has(> table)`, L2572–2579 side-panel `:has()`, L3002 & L3026 modal blur/keydown, L4108 `injectMainSidebarButton`, L4251–4266 `hookShellMetrics`, L4415 `tick`) và cập nhật `scripts/verify_cdp.js`.
-- **Cảnh báo rủi ro:** `engine/core.js` đang phục vụ Node daemon `PID 16072` hiện hành nên mọi tối ưu Lazy HTTP và `skipSave` trong P1 phải tương thích ngược với `daemon/theme_daemon.js` cho tới cổng cutover P4.
+- **Phiên gần nhất hoàn tất:** Phase P1 — Tối ưu `engine/core.js` & cập nhật `scripts/verify_cdp.js`.
+- **Đã làm xong:** Bỏ `syncShellMetrics()` khỏi mỗi tick AI stream (chỉ chạy khi đổi shell/hole/side-panel/ResizeObserver); đạt `0 :has()` và `0 live backdrop-filter`; đổi `wpUrl`/avatars/prebaked glass sang `blob:` URL (giảm `<style>` từ `53,020` xuống `22,610 bytes`); debounce save (`200ms`) + glass (`80ms`) + `skipSave`; pause video nền khi `document.hidden`; hỗ trợ Lazy HTTP cho `BOOT_ASSETS` + stickers; sửa `injectMainSidebarButton()` (`settingsTriggerPresent: true`); gắn `keydown` modal bằng `AbortController`.
+- **File bị biến đổi:** `engine/core.js`, `scripts/verify_cdp.js`, `PROGRESS.md` (và rebuild `dist/theme_payload.js` gitignored).
+- **Việc phiên tới cần làm ngay:** Bắt đầu **P2** — khởi tạo `Cargo.toml` và viết các module Rust lõi (`src/lib.rs`, `src/paths.rs`, `src/sys.rs`, `src/config.rs`, `src/ws.rs`, `src/cdp.rs`, `src/builder.rs`) kèm `cargo test` PASS 100%.
+- **Cảnh báo rủi ro:** Rust `builder.rs` phải sinh `dist/theme_payload.js` theo chiến lược Lazy HTTP (D3: chỉ inline SVG nhỏ + Mali WOFF2 fonts, giữ nguyên placeholder `/*__THEMES_PLACEHOLDER__*/{}` và `/*__BOOT_ASSETS_PLACEHOLDER__*/{}`), đồng thời giữ nguyên Node daemon `PID 16072` đến cổng cutover P4.

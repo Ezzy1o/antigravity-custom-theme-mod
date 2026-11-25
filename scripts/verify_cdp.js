@@ -112,6 +112,11 @@ const INSPECT_EXPR = `(() => {
     const liveBlurScrollers = scrollers.filter((el) => /blur\\(/i.test(getComputedStyle(el).backdropFilter || ''));
     const shellBackdrop = shellEl ? (getComputedStyle(shellEl).backdropFilter || 'none') : 'none';
     const hasLiveBlurRule = /blur\\(/i.test(shellBackdrop) || liveBlurScrollers.length > 0;
+    const styleBytes = styleEl ? styleEl.textContent.length : 0;
+    const hasSelectorCount = styleEl ? (styleEl.textContent.match(/:has\\(/g) || []).length : 0;
+    const styleHasLiveBlur = styleEl ? /backdrop-filter\\s*:\\s*(?!none\\b)[^;]*blur\\(/i.test(styleEl.textContent) : false;
+    const modalEl = document.getElementById('agy-custom-theme-modal-backdrop');
+    const modalHasLiveBlur = modalEl ? /blur\\(/i.test(getComputedStyle(modalEl).backdropFilter || '') : false;
     return {
         url: location.href,
         viewport: { width: window.innerWidth, height: window.innerHeight },
@@ -127,8 +132,12 @@ const INSPECT_EXPR = `(() => {
         scrollerCount: scrollers.length,
         liveBlurScrollerCount: liveBlurScrollers.length,
         hasLiveBlurRule,
+        styleBytes,
+        hasSelectorCount,
+        styleHasLiveBlur,
+        modalHasLiveBlur,
         settingsTriggerPresent: Boolean(document.getElementById('agy-custom-theme-sidebar-btn')),
-        composerPresent: Boolean(document.querySelector('div.relative.flex.flex-col.rounded-lg.border')),
+        composerPresent: Boolean(document.querySelector('.surface-composer, div.relative.flex.flex-col.rounded-lg.border')),
     };
 })()`;
 
@@ -142,7 +151,11 @@ async function main() {
     const port = parseInt(fs.readFileSync(portFile, 'utf8').trim().split(/\r?\n/)[0], 10);
     const targets = await fetchJson(`http://127.0.0.1:${port}/json`);
     const pages = (Array.isArray(targets) ? targets : []).filter(
-        (t) => t && t.type === 'page' && t.webSocketDebuggerUrl && String(t.url || '').includes('127.0.0.1')
+        (t) => {
+            if (!t || t.type !== 'page' || !t.webSocketDebuggerUrl) return false;
+            const u = String(t.url || '');
+            return u.startsWith('https://127.0.0.1:') || u.includes('workbench') || u.includes('launchpad');
+        }
     );
 
     if (pages.length === 0) {
@@ -163,11 +176,15 @@ async function main() {
         console.error('[verify-cdp] FAIL: #antigravity-custom-theme-active not active on any page.');
         process.exit(1);
     }
-    if (themedPages.some((r) => r.hasLiveBlurRule)) {
-        console.error('[verify-cdp] FAIL: Detected backdrop-filter blur rule in injected style.');
+    if (themedPages.some((r) => r.hasLiveBlurRule || r.styleHasLiveBlur || r.modalHasLiveBlur)) {
+        console.error('[verify-cdp] FAIL: Detected backdrop-filter blur rule in injected style or modal.');
         process.exit(1);
     }
-    console.log(`[verify-cdp] PASS: ${themedPages.length}/${results.length} page(s) themed with zero live blur.`);
+    if (themedPages.some((r) => r.hasSelectorCount > 0)) {
+        console.error('[verify-cdp] FAIL: Detected :has() selector in injected style.');
+        process.exit(1);
+    }
+    console.log(`[verify-cdp] PASS: ${themedPages.length}/${results.length} page(s) themed with zero live blur and zero :has().`);
 }
 
 main().catch((err) => {
