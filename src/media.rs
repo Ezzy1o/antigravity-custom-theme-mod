@@ -39,7 +39,6 @@ impl MediaServer {
             TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?
         };
         let port = listener.local_addr()?.port();
-        listener.set_nonblocking(true)?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&shutdown);
@@ -47,9 +46,12 @@ impl MediaServer {
             .name("agy-media-http".into())
             .stack_size(256 * 1024)
             .spawn(move || {
-                while !flag.load(Ordering::Relaxed) {
+                loop {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            if flag.load(Ordering::Relaxed) {
+                                break;
+                            }
                             let p = Arc::clone(&paths);
                             let c = Arc::clone(&md5_cache);
                             let _ = thread::Builder::new()
@@ -59,10 +61,10 @@ impl MediaServer {
                                     let _ = handle_connection(stream, &p, &c);
                                 });
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(20));
-                        }
                         Err(_) => {
+                            if flag.load(Ordering::Relaxed) {
+                                break;
+                            }
                             thread::sleep(Duration::from_millis(50));
                         }
                     }
@@ -82,6 +84,10 @@ impl MediaServer {
 
     pub fn stop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect_timeout(
+            &SocketAddr::from(([127, 0, 0, 1], self.port)),
+            Duration::from_millis(200),
+        );
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
@@ -145,6 +151,7 @@ fn mime_for_path(path: &Path) -> &'static str {
         "svg" => "image/svg+xml",
         "bmp" => "image/bmp",
         "woff2" => "font/woff2",
+        "js" => "application/javascript; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -987,6 +994,13 @@ fn handle_connection(mut stream: TcpStream, paths: &AppPaths, md5_cache: &Md5Cac
             resolve_safe_subpath(&paths.themes_assets_dir, rel)
         } else if let Some(rel) = pathname.strip_prefix("/user_media/") {
             resolve_safe_subpath(&paths.user_media_dir, rel)
+        } else if let Some(rel) = pathname.strip_prefix("/engine/") {
+            if matches!(rel, "studio.js" | "boot.js" | "reveal.js") {
+                resolve_safe_subpath(&paths.dist_dir, rel)
+                    .or_else(|| resolve_safe_subpath(&paths.root.join("engine"), rel))
+            } else {
+                None
+            }
         } else {
             None
         };

@@ -204,7 +204,7 @@ fn run_session_loop(
     missing_logged: &AtomicBool,
     echo_stdout: bool,
 ) {
-    let mut ws = match connect_ws(&target.web_socket_debugger_url, Duration::from_millis(200)) {
+    let mut ws = match connect_ws(&target.web_socket_debugger_url, Duration::from_millis(500)) {
         Ok(ws) => ws,
         Err(e) => {
             append_log(
@@ -476,6 +476,12 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
     let mut last_payload_stamp = file_stamp(&paths.payload_js);
     let mut last_themes_stamp = file_stamp(&paths.themes_json);
     let mut last_engine_stamp = file_stamp(&paths.engine_js);
+    let engine_dir = paths.engine_js.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let mut last_lazy_stamps = [
+        file_stamp(&engine_dir.join("studio.js")),
+        file_stamp(&engine_dir.join("boot.js")),
+        file_stamp(&engine_dir.join("reveal.js")),
+    ];
     let mut last_scan = Instant::now() - Duration::from_secs(10);
 
     trim_working_set();
@@ -484,9 +490,18 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
         if opts.watch_themes {
             let cur_themes = file_stamp(&paths.themes_json);
             let cur_engine = file_stamp(&paths.engine_js);
-            if cur_themes != last_themes_stamp || cur_engine != last_engine_stamp {
+            let cur_lazy_stamps = [
+                file_stamp(&engine_dir.join("studio.js")),
+                file_stamp(&engine_dir.join("boot.js")),
+                file_stamp(&engine_dir.join("reveal.js")),
+            ];
+            if cur_themes != last_themes_stamp
+                || cur_engine != last_engine_stamp
+                || cur_lazy_stamps != last_lazy_stamps
+            {
                 last_themes_stamp = cur_themes;
                 last_engine_stamp = cur_engine;
+                last_lazy_stamps = cur_lazy_stamps;
                 thread::sleep(Duration::from_millis(120));
                 let build_opts = BuildOptions {
                     themes_path: paths.themes_json.clone(),
@@ -570,7 +585,8 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
             }
         }
 
-        thread::sleep(Duration::from_millis(250));
+        let sleep_ms = if opts.watch_themes { 250 } else { 1000 };
+        thread::sleep(Duration::from_millis(sleep_ms));
     }
 
     append_log(&paths.log_file, "Shutting down Rust daemon.", opts.echo_stdout);

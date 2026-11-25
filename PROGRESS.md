@@ -1,6 +1,6 @@
 # PROGRESS — Antigravity Custom Theme Engine (Tawa Rust Edition)
 
-## Phase Hiện Tại: **P4 — Release Build, Rust Daemon Cutover, Live CDP Verify & Cleanup (HOÀN TẤT — Cổng G3 Đạt 100%)**
+## Phase Hiện Tại: **P5 — Zero-Tradeoff Performance, CPU, RAM & ROM Optimization Pass (HOÀN TẤT 100%)**
 
 | Phase | Trạng Thái | Commit Hash | Bằng Chứng Nghiệm Thu |
 | :--- | :--- | :--- | :--- |
@@ -8,21 +8,22 @@
 | P1 `engine/core.js` Perf, FPS & DOM Fixes | 🟢 Hoàn tất | `c026887` | Static audit `engine/core.js` (`4,727` dòng, `221,608 bytes`): `0` `:has()`, `0` `backdrop-filter: blur(...)`, `node --check` PASS. Build `dist/theme_payload.js` (`1744.2 KB`) + hot-reload vào Antigravity thật, `node scripts/verify_cdp.js` PASS `1/1`: `styleBytes` giảm `53,020` → `22,610 bytes`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `styleHasLiveBlur: false`, `modalHasLiveBlur: false`, `settingsTriggerPresent: true`, `composerPresent: true`. |
 | P2 Rust Core (`builder`, `cdp`, `ws`, `config`, `sys`, `paths`, `md5`) | 🟢 Hoàn tất | `58c9e83` | `cargo test -- --nocapture` biên dịch sạch 0 warning (`2.18s`), **12 passed; 0 failed** (`0.07s`): RFC 1321 + streaming MD5 64 KiB, atomic config merge, Win32 PID/memory/trim, RFC 6455 WS loopback fragment+ping/pong, CDP filter chặn `http://127.0.0.1:8787` & `8789`, Lazy HTTP builder biên dịch **4 theme** thành `285,252 bytes` (`278.6 KB`, giảm 6.26× so với `1,786,039 bytes`) trong **`4 ms`** và `node --check` PASS. |
 | P3 Rust Media Server, `daemon`, `installer`, CLI & Launcher | 🟢 Hoàn tất | `071beb6` | Viết `src/media.rs` (streaming `Range 206`, `/assets/*`, `/user_media/*`, `/user_media_list`, `/upload` 64 KiB MD5 dedup, `/delete_media`), `src/daemon.rs`, `src/bin/daemon.rs`, `src/installer.rs`, `src/main.rs`, `agy-theme.bat`, `scripts/install-win.ps1`, `scripts/install-unix.sh`. `cargo test` **0 warning, 14 passed; 0 failed** (`0.11s`); `cargo build` (`0.90s`) PASS; CLI `agy-theme --help`, `themes`, `status` PASS (`CDP port 53262 active`, Node `PID 16072` giữ nguyên). |
-| P4 Release Build, Cutover, Live CDP Verify & Cleanup (Cổng G3) | 🟢 Hoàn tất | `92c089c` | Thêm `tests/integration_tests.rs` (6 integration test), `cargo test` sau xóa legacy **0 warning, 20/20 PASS** (`14` unit + `6` integration); `cargo build --release` **0 warning** (`13.58s`, `agy-theme.exe` = `637,952 bytes`, `agy-theme-daemon.exe` = `544,768 bytes`). Cutover dừng Node `PID 16072`, build Lazy HTTP `dist/theme_payload.js` (`285,252 bytes`, `278.6 KB`, `1 ms`, `node --check` PASS), `agy-theme.exe install` đăng ký & chạy Task Scheduler `AntigravityCustomTheme` (`Running`), xóa `silent-start.vbs` và Startup `.lnk` cũ. Rust daemon `PID 21220` chạy ổn định ở `1.62–1.64 MB` Working Set / `0.95–1.34 MB` Private Memory, chỉ attach `https://127.0.0.1:53265/...`. `agy-theme.exe verify` PASS `1/1` (`themeActive: true`, `styleBytes: 22610`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `settingsTriggerPresent: true`, `composerPresent: true`). HTTP Media Server `127.0.0.1:47821` PASS `/assets/wlop_cosmic_2k.webp` (`200`, `518,238 B`), `Range: bytes=0-1023` (`206`, `bytes 0-1023/16010551`), `/user_media_list` (`200`, `10/10` file). Đã xóa `daemon/theme_daemon.js`, `scripts/build_payload.py`, `scripts/uninstall.js`, `scripts/verify_cdp.js` và cập nhật `README.md`, `TAWA_MOD_NOTES.md`, `PROGRESS.md`. |
+| P4 Release Build, Cutover, Live CDP Verify & Cleanup (Cổng G3) | 🟢 Hoàn tất | `92c089c` | `tests/integration_tests.rs` (6 tests), `cargo test` `20/20` PASS, `cargo build --release` 0 warning, cutover Node `PID 16072` → Rust daemon, Task Scheduler `AntigravityCustomTheme`, xóa legacy Node/Python/VBS. |
+| P5 Zero-Tradeoff Perf, CPU, RAM & ROM Optimization (D9–D11) | 🟢 Hoàn tất | Pending P5 commit | Tách 3 lazy JS (`studio.js` `58.4 KB`, `boot.js` `28.0 KB`, `reveal.js` `20.4 KB`), Lazy HTTP font Mali, `compact_js` → `dist/theme_payload.js` còn **`98,960 bytes` (`96.6 KB`, build `2 ms`)**; `getState()` RAM cache (`hasStateCache: true`), `<style id="antigravity-custom-theme-metrics">` (`204 B`, `inlineAgyVars: 0`), `styleBytes` giảm còn **`17,633 B`**, `canvas.toBlob()` + `__AGY_BLUR_GEN__`, `scheduleTick` `180ms` throttle; blocking `MediaServer::accept()` (`5s Idle CPU = 0.0000s`, `WS 0.48 MB`, `Private 1.15 MB`); xóa 2 MP4 trùng preset (`19.89 MB`), nén 4K PNG → `2560×1754` WebP (`316,271 B`), xóa `target/debug` (`231.36 MB`). `cargo test` **20/20 PASS**; `agy-theme verify` **PASS `1/1`**; lazy `/engine/studio.js` live render `72,041 B` (`2` cards, `modalBlur: none`). |
 
-## Bảng Đối Chứng Thực Tế Trước – Sau (Gate G3)
+## Bảng Đối Chứng Thực Tế Trước – Sau (Baseline P0 → P5)
 
-| Hạng mục đo | Baseline P0 / Pre-Cutover (Node + Python) | Sau P4 (Tawa Rust Edition) | Kết quả |
+| Hạng mục đo | Baseline P0 (Node + Python) | Sau P4 (Rust Edition) | Sau P5 (Zero-Tradeoff Optimized) |
 | :--- | :--- | :--- | :--- |
-| **Working Set RAM daemon** | `60.71 MB` (P0) / `63.06 MB` (Pre-P4, PID `16072`) | **`1.62 – 1.64 MB`** (PID `21220`, `1.44 MB` lúc mới khởi động) | Giảm **~38.5×** |
-| **Private Memory daemon** | `80.68 MB` (P0) / `86.42 MB` (Pre-P4, PID `16072`) | **`0.95 – 1.34 MB`** (PID `21220`) | Giảm **~64.5× – 90.9×** |
-| **`dist/theme_payload.js`** | `1,777,213 bytes` (P0) / `1,786,039 bytes` (`1,744.2 KB`) | **`285,252 bytes` (`278.6 KB`)** | Giảm **6.26×** |
-| **Thời gian build payload** | Python (`scripts/build_payload.py`) | **`1 ms`** (`agy-theme.exe build`) | Tức thì |
-| **`<style>` active (`styleBytes`)** | `53,020 bytes` | **`22,610 bytes`** | Giảm **57.4%** |
-| **Rule `:has()` toàn cục** | `7` rules | **`0`** (`hasSelectorCount: 0`) | Đạt **0 :has()** |
-| **Live `backdrop-filter: blur()`** | `1` (`blur(10px)` ở modal) | **`0`** (`hasLiveBlurRule: false`, `modalHasLiveBlur: false`) | Đạt **0 live blur** |
-| **Nút sidebar `Custom theme`** | `settingsTriggerPresent: false` | **`settingsTriggerPresent: true`** | Sửa dứt điểm |
-| **Kho `themes/user_media/`** | `16` file (6 MP4 trùng MD5 dư `48.58 MB`) | **`10` file** (`3` ảnh, `4` video, `3` audio; `0` trùng) | Thu hồi `48.58 MB` |
+| **Working Set RAM daemon** | `60.71 MB` (P0) / `63.06 MB` (Pre-P4) | `1.62 – 1.64 MB` (`PID 21220`) | **`0.48 – 1.07 MB`** (`PID 16880`) |
+| **Private Memory daemon** | `80.68 MB` (P0) / `86.42 MB` (Pre-P4) | `0.95 – 1.34 MB` | **`0.94 – 1.15 MB`** |
+| **Idle CPU (5s delta)** | Node event loop + `fs.watch` | `0.76s` tổng (50 wakeups/s) | **`0.0000s`** (blocking `accept()`) |
+| **`dist/theme_payload.js`** | `1,777,213 bytes` (`1,735.6 KB`) | `285,252 bytes` (`278.6 KB`) | **`98,960 bytes` (`96.6 KB`, giảm 18×)** |
+| **Thời gian build payload** | Python (`scripts/build_payload.py`) | `1 ms` | **`2 ms`** (compacting 4 file JS) |
+| **`<style>` active (`styleBytes`)** | `53,020 bytes` | `22,610 bytes` | **`17,633 bytes`** (`+204 B` metrics, `0` inline `--agy-*`) |
+| **Rule `:has()` / Live Blur** | `7` `:has()`, `1` modal blur | `0` `:has()`, `0` live blur | **`0` `:has()`, `0` live blur** |
+| **Ảnh nền & ROM `user_media/`** | `4204×2880` PNG, `16` file (`74.4 MB`) | `4204×2880` PNG, `10` file (`25.84 MB`) | **`2560×1754` WebP, `8` file (`5.65 MB`)** |
+| **ROM `target/`** | - | `target/debug` + `target/release` | **`target/release` only (thu hồi `231.36 MB`)** |
 
 ## Số Liệu Nền (Baseline 2026-11-25)
 - **Toolchain máy thật:** `rustc 1.96.0` (`x86_64-pc-windows-gnu`), `cargo 1.96.0`, `gcc.exe` + `lld.exe` (MSYS2 UCRT64).

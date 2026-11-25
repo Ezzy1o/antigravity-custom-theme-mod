@@ -1,8 +1,49 @@
 (() => {
   const THEMES = /*__THEMES_PLACEHOLDER__*/{};
   const BOOT_ASSETS = /*__BOOT_ASSETS_PLACEHOLDER__*/{};
+  const BUILD_VER = /*__BUILD_VER_PLACEHOLDER__*/"dev";
   const THEME_KEYS = Object.keys(THEMES);
   const DEFAULT_THEME_KEY = THEME_KEYS[0] || 'Default';
+
+  if (window.__AGY_MOD_VER__ !== BUILD_VER) {
+    window.__AGY_MOD_VER__ = BUILD_VER;
+    window.__AGY_LOADED_MODS__ = {};
+  }
+
+  function loadLazyModule(name) {
+    const mods = window.__AGY_LOADED_MODS__ || (window.__AGY_LOADED_MODS__ = {});
+    const globalKey = `__AGY_LAZY_${name.toUpperCase()}__`;
+    if (mods[name] === true && typeof window[globalKey] === 'function') {
+      return Promise.resolve(window[globalKey]);
+    }
+    if (mods[name] && typeof mods[name].then === 'function') {
+      return mods[name];
+    }
+    const base = window.__AGY_MEDIA_BASE_URL__
+      ? String(window.__AGY_MEDIA_BASE_URL__).replace(/\/+$/, '')
+      : '';
+    if (!base) {
+      return Promise.reject(new Error(`Media server base unavailable for lazy module: ${name}`));
+    }
+    const promise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = `${base}/engine/${name}.js?v=${encodeURIComponent(BUILD_VER)}`;
+      s.async = true;
+      s.onload = () => {
+        s.remove();
+        mods[name] = true;
+        resolve(window[globalKey]);
+      };
+      s.onerror = () => {
+        s.remove();
+        delete mods[name];
+        reject(new Error(`Failed to load lazy module: ${name}`));
+      };
+      (document.head || document.documentElement).appendChild(s);
+    });
+    mods[name] = promise;
+    return promise;
+  }
 
   const STORAGE_THEME = 'agy_theme_v3';
   const STORAGE_BUBBLE = 'agy_bubble_v3';
@@ -27,7 +68,6 @@
   const STORAGE_SKETCH_REVEAL = 'agy_sketch_reveal_v3';
   const STORAGE_TAWA_GREETING = 'agy_tawa_greeting_v3';
   const GREETING_RX = /^(?:Hey\s+[^,]{1,40},\s+what\s+should\s+we\s+build\s+today\??|Good\s+to\s+see\s+you,\s+[^.]{1,40}\.\s+What'?s\s+next\??|What\s+(?:should|are)\s+we\s+build(?:ing)?\s+today\??|Welcome\s+back[,.!\s]+[^.!?]{0,40}(?:[.!?]\s*(?:Where\s+should\s+we\s+pick\s+up|What'?s\s+next|What\s+should\s+we\s+build)[^.!?]{0,40}[.!?]?)?|Where\s+should\s+we\s+pick\s+up\??|Ready\s+(?:to\s+build|when\s+you\s+are)[,.!\s]*.*)$/i;
-  const DEFAULT_CUSTOM_GREETINGS = [];
 
   const CHECK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
@@ -227,6 +267,7 @@
       const arr = Array.isArray(window.__AGY_USER_MEDIA__[meta.bucket]) ? window.__AGY_USER_MEDIA__[meta.bucket] : [];
       window.__AGY_USER_MEDIA__[meta.bucket] = [nextItem, ...arr.filter((it) => canonicalMediaKey(it.url) !== key)];
     }
+    invalidateStateCache();
     return next;
   }
 
@@ -242,6 +283,7 @@
         window.__AGY_USER_MEDIA__[meta.bucket] = window.__AGY_USER_MEDIA__[meta.bucket].filter((it) => canonicalMediaKey(it.url) !== key);
       }
     }
+    invalidateStateCache();
     return next;
   }
 
@@ -269,7 +311,14 @@
     return normalizeGreetingLines(init.customGreetings);
   }
 
+  function invalidateStateCache() {
+    window.__AGY_STATE_CACHE__ = null;
+  }
+
   function getState() {
+    if (window.__AGY_STATE_CACHE__) {
+      return window.__AGY_STATE_CACHE__;
+    }
     const init = window.__AGY_INITIAL_CONFIG__ || {};
     const rawTheme = localStorage.getItem(STORAGE_THEME) || init.themeName || DEFAULT_THEME_KEY;
     const themeName = THEMES[rawTheme] ? rawTheme : DEFAULT_THEME_KEY;
@@ -317,13 +366,15 @@
     const tawaGreeting = localStorage.getItem(STORAGE_TAWA_GREETING) !== null
       ? localStorage.getItem(STORAGE_TAWA_GREETING) !== 'false'
       : (init.tawaGreeting !== undefined ? init.tawaGreeting : true);
-    return {
+    const cached = {
       themeName, bubbleName, inputStyle, dimming, wpEnabled, wpMode,
       customWp, customVideo, savedImages, savedVideos,
       taskVoices, taskVoiceEnabled, taskVoiceVol, customGreetings,
       userAvatar, agentAvatar, glassBlur, avatarSize, avatarRadius,
       bootIntro, sketchReveal, tawaGreeting
     };
+    window.__AGY_STATE_CACHE__ = cached;
+    return cached;
   }
 
   function resolveMediaUrl(relOrAbs) {
@@ -437,36 +488,6 @@
     }
   }
 
-  // Downscale user/agent avatar uploads to 192x192 WebP once so theme_config.json stays tiny
-  function compressAvatarFile(file, callback) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const size = 192;
-          const canvas = document.createElement('canvas');
-          canvas.width = size;
-          canvas.height = size;
-          const ctx = canvas.getContext('2d');
-          const natW = img.naturalWidth || size;
-          const natH = img.naturalHeight || size;
-          const side = Math.min(natW, natH);
-          const sx = Math.max(0, Math.floor((natW - side) / 2));
-          const sy = Math.max(0, Math.floor((natH - side) / 2));
-          ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
-          const out = canvas.toDataURL('image/webp', 0.88);
-          callback(out && out.startsWith('data:image/webp') ? out : canvas.toDataURL('image/png'));
-        } catch (e) {
-          callback(String(reader.result || ''));
-        }
-      };
-      img.onerror = () => callback(String(reader.result || ''));
-      img.src = String(reader.result || '');
-    };
-    reader.readAsDataURL(file);
-  }
-
   function findActiveShell() {
     const all = Array.from(document.querySelectorAll('.agy-shell'));
     if (all.length <= 1) return all[0] || null;
@@ -483,15 +504,60 @@
     return best;
   }
 
-  // Pre-bake L-shaped header/sidebar glass blur (debounced + LRU-capped + blob: URL) to avoid per-frame GPU backdrop readback
+  function flushMetricsStyle() {
+    const ms = window.__AGY_METRICS_STATE__ || (window.__AGY_METRICS_STATE__ = {
+      glassBg: '',
+      beforeClip: '',
+      holeClip: ''
+    });
+    let css = '';
+    if (ms.glassBg || ms.beforeClip) {
+      css += '.agy-shell::before{';
+      if (ms.glassBg) css += `background-image:${ms.glassBg}!important;`;
+      if (ms.beforeClip) css += `clip-path:${ms.beforeClip}!important;`;
+      css += '}';
+    }
+    if (ms.holeClip) {
+      css += `body[data-has-browser-hole="true"] .agy-shell[data-agy-hole-active="1"]::after,body[data-has-browser-hole="true"] .agy-shell[data-agy-hole-active="1"] > #agy-live-bg-layer{clip-path:${ms.holeClip}!important;}`;
+    }
+    if (css === window.__AGY_LAST_METRICS_CSS__) return;
+    window.__AGY_LAST_METRICS_CSS__ = css;
+    let el = document.getElementById('antigravity-custom-theme-metrics');
+    if (!el) {
+      el = document.createElement('style');
+      el.id = 'antigravity-custom-theme-metrics';
+      (document.head || document.documentElement).appendChild(el);
+    }
+    el.textContent = css;
+  }
+
+  function putBlurCache(key, val) {
+    if (!(window.__AGY_BLUR_CACHE__ instanceof Map)) {
+      window.__AGY_BLUR_CACHE__ = new Map();
+    }
+    const cache = window.__AGY_BLUR_CACHE__;
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, val);
+    while (cache.size > MAX_BLUR_CACHE) {
+      const oldestKey = cache.keys().next().value;
+      const oldVal = cache.get(oldestKey);
+      cache.delete(oldestKey);
+      if (typeof oldVal === 'string' && oldVal.startsWith('blob:')) {
+        try { URL.revokeObjectURL(oldVal); } catch (e) {}
+      }
+    }
+  }
+
+  // Pre-bake L-shaped header/sidebar glass blur (debounced + LRU-capped + direct toBlob + generation token)
   function syncPrebakedGlass(wpUrl, overlayRgb, overlayAlpha, tintBg, blurStr, deferMs = 0) {
     if (window.__AGY_BLUR_TIMER__) {
       clearTimeout(window.__AGY_BLUR_TIMER__);
       window.__AGY_BLUR_TIMER__ = 0;
     }
-    const shell = findActiveShell();
+    const ms = window.__AGY_METRICS_STATE__ || (window.__AGY_METRICS_STATE__ = { glassBg: '', beforeClip: '', holeClip: '' });
     if (!wpUrl) {
-      if (shell) shell.style.removeProperty('--agy-l-glass-bg');
+      ms.glassBg = '';
+      flushMetricsStyle();
       return;
     }
     if (!(window.__AGY_BLUR_CACHE__ instanceof Map)) {
@@ -501,17 +567,20 @@
     const key = `${wpUrl.slice(0, 64)}|${wpUrl.length}|${overlayRgb}|${overlayAlpha.toFixed(3)}|${tintBg}|${blurStr}`;
     const cached = cache.get(key);
     if (cached) {
-      cache.delete(key);
-      cache.set(key, cached);
-      if (shell) shell.style.setProperty('--agy-l-glass-bg', 'url("' + cached + '")');
+      putBlurCache(key, cached);
+      ms.glassBg = `url("${cached}")`;
+      flushMetricsStyle();
       return;
     }
+    const gen = (window.__AGY_BLUR_GEN__ = (window.__AGY_BLUR_GEN__ || 0) + 1);
     const runBake = () => {
+      if (window.__AGY_BLUR_GEN__ !== gen) return;
       const img = new Image();
       if (!/^(?:data|blob|file):/i.test(wpUrl)) {
         img.crossOrigin = 'anonymous';
       }
       img.onload = () => {
+        if (window.__AGY_BLUR_GEN__ !== gen) return;
         try {
           const w = 640;
           const h = Math.max(180, Math.round((img.naturalHeight || 1440) * (w / (img.naturalWidth || 2560))));
@@ -531,24 +600,28 @@
             ctx.fillStyle = tintBg;
             ctx.fillRect(0, 0, w, h);
           }
-          const bakedData = canvas.toDataURL('image/webp', 0.85);
-          canvas.width = 0;
-          canvas.height = 0;
-          const bakedUrl = toShortBlobUrl(bakedData);
-          if (cache.has(key)) {
-            cache.delete(key);
-          }
-          cache.set(key, bakedUrl);
-          while (cache.size > MAX_BLUR_CACHE) {
-            const oldestKey = cache.keys().next().value;
-            const oldVal = cache.get(oldestKey);
-            cache.delete(oldestKey);
-            if (typeof oldVal === 'string' && oldVal.startsWith('blob:')) {
-              try { URL.revokeObjectURL(oldVal); } catch (e) {}
+          const applyBakedUrl = (bakedUrl) => {
+            canvas.width = 0;
+            canvas.height = 0;
+            if (window.__AGY_BLUR_GEN__ !== gen) {
+              if (typeof bakedUrl === 'string' && bakedUrl.startsWith('blob:')) {
+                try { URL.revokeObjectURL(bakedUrl); } catch (e) {}
+              }
+              return;
             }
+            putBlurCache(key, bakedUrl);
+            const curMs = window.__AGY_METRICS_STATE__ || (window.__AGY_METRICS_STATE__ = { glassBg: '', beforeClip: '', holeClip: '' });
+            curMs.glassBg = `url("${bakedUrl}")`;
+            flushMetricsStyle();
+          };
+          if (typeof canvas.toBlob === 'function' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+            canvas.toBlob((blob) => {
+              if (blob) applyBakedUrl(URL.createObjectURL(blob));
+              else applyBakedUrl(toShortBlobUrl(canvas.toDataURL('image/webp', 0.85)));
+            }, 'image/webp', 0.85);
+          } else {
+            applyBakedUrl(toShortBlobUrl(canvas.toDataURL('image/webp', 0.85)));
           }
-          const curShell = findActiveShell();
-          if (curShell) curShell.style.setProperty('--agy-l-glass-bg', 'url("' + bakedUrl + '")');
         } catch (e) {}
       };
       img.src = wpUrl;
@@ -561,461 +634,6 @@
     } else {
       runBake();
     }
-  }
-
-  // ==================== UNIVERSAL ANIME LINE-ART TRACER (CANNY-STYLE NMS + COVER CROP + BEZIER) ====================
-  function parseObjPosRatio(posStr) {
-    const parts = String(posStr || '50% 50%').trim().split(/\s+/);
-    const mapTok = (tok, def) => {
-      if (!tok) return def;
-      if (tok === 'left' || tok === 'top') return 0;
-      if (tok === 'center') return 0.5;
-      if (tok === 'right' || tok === 'bottom') return 1;
-      if (tok.endsWith('%')) {
-        const v = parseFloat(tok);
-        return Number.isFinite(v) ? Math.max(0, Math.min(1, v / 100)) : def;
-      }
-      return def;
-    };
-    return [mapTok(parts[0], 0.5), mapTok(parts[1] || parts[0], 0.5)];
-  }
-
-  function simplifyChainRDPFlat(ptsX, ptsY, count, epsSq) {
-    if (count <= 3) {
-      const out = new Float32Array(count * 2);
-      for (let i = 0; i < count; i++) {
-        out[i * 2] = ptsX[i];
-        out[i * 2 + 1] = ptsY[i];
-      }
-      return out;
-    }
-    const keep = new Uint8Array(count);
-    keep[0] = 1;
-    keep[count - 1] = 1;
-    const stack = [[0, count - 1]];
-    while (stack.length > 0) {
-      const [s, e] = stack.pop();
-      if (e - s <= 1) continue;
-      const ax = ptsX[s];
-      const ay = ptsY[s];
-      const dx = ptsX[e] - ax;
-      const dy = ptsY[e] - ay;
-      const lenSq = dx * dx + dy * dy;
-      let maxD = 0;
-      let maxI = -1;
-      for (let i = s + 1; i < e; i++) {
-        const px = ptsX[i] - ax;
-        const py = ptsY[i] - ay;
-        let dSq;
-        if (lenSq < 1e-9) {
-          dSq = px * px + py * py;
-        } else {
-          const t = Math.max(0, Math.min(1, (px * dx + py * dy) / lenSq));
-          const cx = px - t * dx;
-          const cy = py - t * dy;
-          dSq = cx * cx + cy * cy;
-        }
-        if (dSq > maxD) {
-          maxD = dSq;
-          maxI = i;
-        }
-      }
-      if (maxD > epsSq && maxI > s) {
-        keep[maxI] = 1;
-        stack.push([s, maxI], [maxI, e]);
-      }
-    }
-    let kept = 0;
-    for (let i = 0; i < count; i++) if (keep[i]) kept++;
-    const out = new Float32Array(kept * 2);
-    let k = 0;
-    for (let i = 0; i < count; i++) {
-      if (keep[i]) {
-        out[k++] = ptsX[i];
-        out[k++] = ptsY[i];
-      }
-    }
-    return out;
-  }
-
-  function extractStrokesJS(mediaEl, targetW = 1280, targetH = 800, objPosStr = '50% 50%', maxStrokes = 1380) {
-    const strokes = [];
-    try {
-      const srcW = mediaEl.videoWidth || mediaEl.naturalWidth || 0;
-      const srcH = mediaEl.videoHeight || mediaEl.naturalHeight || 0;
-      if (srcW > 0 && srcH > 0) {
-        const viewAspect = Math.max(0.4, Math.min(3.5, targetW / Math.max(1, targetH)));
-        const w = 920;
-        const h = Math.max(240, Math.round(w / viewAspect));
-        const off = document.createElement('canvas');
-        off.width = w;
-        off.height = h;
-        const octx = off.getContext('2d', { willReadFrequently: true });
-        if (octx) {
-          // Match exact CSS object-fit: cover + object-position crop so every contour aligns 1:1 with the video/image
-          const [rx, ry] = parseObjPosRatio(objPosStr);
-          const srcAspect = srcW / srcH;
-          let sx = 0, sy = 0, sw = srcW, sh = srcH;
-          if (srcAspect > viewAspect) {
-            sw = srcH * viewAspect;
-            sx = Math.max(0, (srcW - sw) * rx);
-          } else if (srcAspect < viewAspect) {
-            sh = srcW / viewAspect;
-            sy = Math.max(0, (srcH - sh) * ry);
-          }
-          octx.imageSmoothingEnabled = true;
-          octx.imageSmoothingQuality = 'medium';
-          octx.drawImage(mediaEl, sx, sy, sw, sh, 0, 0, w, h);
-
-          const data = octx.getImageData(0, 0, w, h).data;
-          off.width = 0;
-          off.height = 0;
-          const totalPx = w * h;
-          // Uint16Array scaled x8 preserves sub-unit accuracy at half the RAM of Float32Array
-          const mag = new Uint16Array(totalPx);
-          const dirBin = new Uint8Array(totalPx);
-          let maxMag = 8;
-          const rowBytes = w * 4;
-          for (let y = 2; y < h - 2; y++) {
-            const row = y * w;
-            const rTopBase = (y - 1) * rowBytes;
-            const rMidBase = y * rowBytes;
-            const rBotBase = (y + 1) * rowBytes;
-
-            let p0 = rTopBase + 4, p1 = rMidBase + 4, p2 = rBotBase + 4;
-            let sR0 = data[p0] + 2 * data[p1] + data[p2], dR0 = data[p2] - data[p0];
-            let sG0 = data[p0 + 1] + 2 * data[p1 + 1] + data[p2 + 1], dG0 = data[p2 + 1] - data[p0 + 1];
-            let sB0 = data[p0 + 2] + 2 * data[p1 + 2] + data[p2 + 2], dB0 = data[p2 + 2] - data[p0 + 2];
-
-            p0 += 4; p1 += 4; p2 += 4;
-            let sR1 = data[p0] + 2 * data[p1] + data[p2], dR1 = data[p2] - data[p0];
-            let sG1 = data[p0 + 1] + 2 * data[p1 + 1] + data[p2 + 1], dG1 = data[p2 + 1] - data[p0 + 1];
-            let sB1 = data[p0 + 2] + 2 * data[p1 + 2] + data[p2 + 2], dB1 = data[p2 + 2] - data[p0 + 2];
-
-            for (let x = 2; x < w - 2; x++) {
-              const rxPos = (x + 1) * 4;
-              const q0 = rTopBase + rxPos, q1 = rMidBase + rxPos, q2 = rBotBase + rxPos;
-              const sR2 = data[q0] + 2 * data[q1] + data[q2], dR2 = data[q2] - data[q0];
-              const sG2 = data[q0 + 1] + 2 * data[q1 + 1] + data[q2 + 1], dG2 = data[q2 + 1] - data[q0 + 1];
-              const sB2 = data[q0 + 2] + 2 * data[q1 + 2] + data[q2 + 2], dB2 = data[q2 + 2] - data[q0 + 2];
-
-              const gxR = sR2 - sR0, gyR = dR0 + 2 * dR1 + dR2;
-              const gxG = sG2 - sG0, gyG = dG0 + 2 * dG1 + dG2;
-              const gxB = sB2 - sB0, gyB = dB0 + 2 * dB1 + dB2;
-
-              sR0 = sR1; sR1 = sR2; dR0 = dR1; dR1 = dR2;
-              sG0 = sG1; sG1 = sG2; dG0 = dG1; dG1 = dG2;
-              sB0 = sB1; sB1 = sB2; dB0 = dB1; dB1 = dB2;
-
-              const gxL = 0.299 * gxR + 0.587 * gxG + 0.114 * gxB;
-              const gyL = 0.299 * gyR + 0.587 * gyG + 0.114 * gyB;
-              const gx1 = gxR - gxG;
-              const gy1 = gyR - gyG;
-              const gx2 = 0.5 * (gxR + gxG) - gxB;
-              const gy2 = 0.5 * (gyR + gyG) - gyB;
-
-              const lSq = gxL * gxL + gyL * gyL;
-              const c1Sq = gx1 * gx1 + gy1 * gy1;
-              const c2Sq = gx2 * gx2 + gy2 * gy2;
-              // Stronger chroma weight preserves isoluminant anime iris boundaries (e.g. gold/pink vs white sclera)
-              const m = Math.sqrt(lSq + 0.90 * (c1Sq + c2Sq));
-              const mScaled = m > 8191 ? 65535 : Math.round(m * 8);
-              const idx = row + x;
-              mag[idx] = mScaled;
-              if (mScaled > maxMag) maxMag = mScaled;
-
-              let gx = gxL, gy = gyL;
-              if (0.90 * c1Sq > lSq && c1Sq >= c2Sq) { gx = gx1; gy = gy1; }
-              else if (0.90 * c2Sq > lSq && c2Sq > c1Sq) { gx = gx2; gy = gy2; }
-              const ax = Math.abs(gx);
-              const ay = Math.abs(gy);
-              if (ax > ay * 2.414) dirBin[idx] = 0;
-              else if (ay > ax * 2.414) dirBin[idx] = 2;
-              else dirBin[idx] = (gx * gy >= 0) ? 1 : 3;
-            }
-          }
-
-          // Canny NMS + 8x5 spatial tile peak tracking so soft foreground corners aren't drowned by global high-contrast areas
-          const nms = new Uint16Array(totalPx);
-          const bins = new Int32Array(128);
-          const GRID_X = 8, GRID_Y = 5;
-          const tileMax = new Uint16Array(GRID_X * GRID_Y);
-          let nmsCount = 0;
-          const margin = 3;
-          const noiseFloor = 7 * 8;
-          for (let y = margin; y < h - margin; y++) {
-            const row = y * w;
-            const ty = Math.min(GRID_Y - 1, Math.floor((y * GRID_Y) / h));
-            for (let x = margin; x < w - margin; x++) {
-              const i = row + x;
-              const m = mag[i];
-              if (m < noiseFloor) continue;
-              const d = dirBin[i];
-              let m1 = 0, m2 = 0;
-              if (d === 0) { m1 = mag[i - 1]; m2 = mag[i + 1]; }
-              else if (d === 2) { m1 = mag[i - w]; m2 = mag[i + w]; }
-              else if (d === 1) { m1 = mag[i - w - 1]; m2 = mag[i + w + 1]; }
-              else { m1 = mag[i - w + 1]; m2 = mag[i + w - 1]; }
-              if (m >= m1 && m >= m2) {
-                nms[i] = m;
-                const b = Math.min(127, Math.floor((m / maxMag) * 127));
-                bins[b]++;
-                nmsCount++;
-                const tx = Math.min(GRID_X - 1, Math.floor((x * GRID_X) / w));
-                const tIdx = ty * GRID_X + tx;
-                if (m > tileMax[tIdx]) tileMax[tIdx] = m;
-              }
-            }
-          }
-
-          let targetEdges = Math.max(140, Math.floor(nmsCount * 0.17));
-          let hiBin = 22;
-          for (let b = 127; b >= 1; b--) {
-            targetEdges -= bins[b];
-            if (targetEdges <= 0) {
-              hiBin = b;
-              break;
-            }
-          }
-          const hiThresh = Math.max(20 * 8, (hiBin / 127) * maxMag);
-          const loThresh = Math.max(10 * 8, hiThresh * 0.34);
-
-          const tileSeed = new Uint16Array(GRID_X * GRID_Y);
-          const tileFollow = new Uint16Array(GRID_X * GRID_Y);
-          for (let ty = 0; ty < GRID_Y; ty++) {
-            for (let tx = 0; tx < GRID_X; tx++) {
-              const tIdx = ty * GRID_X + tx;
-              const nx = (tx + 0.5) / GRID_X;
-              const ny = (ty + 0.5) / GRID_Y;
-              const inFocal = nx >= 0.25 && nx <= 0.75 && ny >= 0.20 && ny <= 0.78;
-              const tmax = tileMax[tIdx];
-              const minFloor = inFocal ? 22 * 8 : 26 * 8;
-              const adaptCap = inFocal ? hiThresh * 0.30 : hiThresh * 0.34;
-              const seed = tmax < minFloor ? 65535 : Math.max(minFloor, Math.min(adaptCap, tmax * 0.20));
-              tileSeed[tIdx] = Math.round(seed);
-              tileFollow[tIdx] = Math.max(7 * 8, Math.round(seed * 0.42));
-            }
-          }
-
-          const visited = dirBin;
-          visited.fill(0);
-          const dirs = [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]];
-          const candidates = [];
-
-          // Reusable flat typed scratch buffers prevent creating tens of thousands of [x, y] tuples during tracing
-          const MAX_HALF = 140;
-          const fwdX = new Int16Array(MAX_HALF);
-          const fwdY = new Int16Array(MAX_HALF);
-          const revX = new Int16Array(MAX_HALF);
-          const revY = new Int16Array(MAX_HALF);
-          const chainX = new Float32Array(MAX_HALF * 2 + 2);
-          const chainY = new Float32Array(MAX_HALF * 2 + 2);
-          const smX = new Float32Array(MAX_HALF * 2 + 2);
-          const smY = new Float32Array(MAX_HALF * 2 + 2);
-
-          function traceHalf(startX, startY, initDx, initDy, minEdge, outX, outY) {
-            let cx = startX, cy = startY;
-            let tanX = initDx, tanY = initDy;
-            let steps = 0, energy = 0;
-            while (steps < MAX_HALF) {
-              let bestX = -1, bestY = -1, bestScore = -1;
-              const tanLen = (tanX === 0 && tanY === 0) ? 0 : Math.hypot(tanX, tanY);
-              for (let d = 0; d < 8; d++) {
-                const dx = dirs[d][0];
-                const dy = dirs[d][1];
-                const dot = tanLen === 0 ? 1 : (dx * tanX + dy * tanY);
-                // Smoothed EMA tangent keeps curved eye irises & circles continuous across 1px raster steps without U-turns
-                if (tanLen > 0 && dot < -0.18 * tanLen) continue;
-                const nx = cx + dx;
-                const ny = cy + dy;
-                if (nx < margin || nx >= w - margin || ny < margin || ny >= h - margin) continue;
-                const ni = ny * w + nx;
-                const nVal = nms[ni];
-                if (visited[ni] || nVal < minEdge) continue;
-                const align = tanLen === 0 ? 1.0 : (1.0 + 0.55 * (dot / tanLen));
-                const sc = nVal * align;
-                if (sc > bestScore) {
-                  bestScore = sc;
-                  bestX = nx;
-                  bestY = ny;
-                }
-              }
-
-              if (bestX < 0 && tanLen > 0) {
-                const ux = Math.round(tanX / tanLen);
-                const uy = Math.round(tanY / tanLen);
-                const gx2 = cx + ux * 2;
-                const gy2 = cy + uy * 2;
-                if (gx2 >= margin && gx2 < w - margin && gy2 >= margin && gy2 < h - margin) {
-                  const gi = gy2 * w + gx2;
-                  if (!visited[gi] && nms[gi] >= minEdge * 0.85) {
-                    bestX = gx2;
-                    bestY = gy2;
-                  }
-                }
-              }
-
-              if (bestX < 0) break;
-              const bi = bestY * w + bestX;
-              visited[bi] = 1;
-              outX[steps] = bestX;
-              outY[steps] = bestY;
-              energy += nms[bi];
-              const stepX = bestX - cx;
-              const stepY = bestY - cy;
-              tanX = tanLen === 0 ? stepX : (tanX * 0.52 + stepX * 0.48);
-              tanY = tanLen === 0 ? stepY : (tanY * 0.52 + stepY * 0.48);
-              cx = bestX;
-              cy = bestY;
-              steps++;
-            }
-            return { len: steps, energy };
-          }
-
-          function collectPass(mode) {
-            for (let y = margin; y < h - margin; y++) {
-              const ty = Math.min(GRID_Y - 1, Math.floor((y * GRID_Y) / h));
-              for (let x = margin; x < w - margin; x++) {
-                const sIdx = y * w + x;
-                if (visited[sIdx]) continue;
-                const val = nms[sIdx];
-                let seedThresh, followThresh;
-                if (mode === 1) {
-                  const tx = Math.min(GRID_X - 1, Math.floor((x * GRID_X) / w));
-                  const tIdx = ty * GRID_X + tx;
-                  seedThresh = tileSeed[tIdx];
-                  followThresh = tileFollow[tIdx];
-                } else if (mode === 2) {
-                  seedThresh = 21 * 8;
-                  followThresh = 9 * 8;
-                } else {
-                  seedThresh = hiThresh;
-                  followThresh = loThresh;
-                }
-                if (val < seedThresh) continue;
-
-                visited[sIdx] = 1;
-                const fwd = traceHalf(x, y, 0, 0, followThresh, fwdX, fwdY);
-                let rev = { len: 0, energy: 0 };
-                if (fwd.len > 0) {
-                  const initDx = x - fwdX[0];
-                  const initDy = y - fwdY[0];
-                  rev = traceHalf(x, y, initDx, initDy, followThresh, revX, revY);
-                }
-
-                const totalLen = rev.len + 1 + fwd.len;
-                const totalEnergy = val + fwd.energy + rev.energy;
-                const avgEnergy = totalEnergy / totalLen;
-
-                // Mode 2 mines long coherent low-contrast curves (white-on-snow silhouettes, soft jawlines) while ignoring short grain
-                if (mode === 2) {
-                  if (totalLen < 18) continue;
-                } else {
-                  const crispDotFloor = Math.max(48 * 8, hiThresh * 0.50);
-                  const minLen = (avgEnergy >= crispDotFloor) ? 3 : 6;
-                  if (totalLen < minLen) continue;
-                }
-
-                let p = 0;
-                for (let i = rev.len - 1; i >= 0; i--) { chainX[p] = revX[i]; chainY[p] = revY[i]; p++; }
-                chainX[p] = x; chainY[p] = y; p++;
-                for (let i = 0; i < fwd.len; i++) { chainX[p] = fwdX[i]; chainY[p] = fwdY[i]; p++; }
-
-                smX[0] = chainX[0]; smY[0] = chainY[0];
-                smX[totalLen - 1] = chainX[totalLen - 1]; smY[totalLen - 1] = chainY[totalLen - 1];
-                for (let i = 1; i < totalLen - 1; i++) {
-                  smX[i] = 0.25 * chainX[i - 1] + 0.5 * chainX[i] + 0.25 * chainX[i + 1];
-                  smY[i] = 0.25 * chainY[i - 1] + 0.5 * chainY[i] + 0.25 * chainY[i + 1];
-                }
-
-                const flatPx = simplifyChainRDPFlat(smX, smY, totalLen, 0.68);
-                const vertCount = flatPx.length / 2;
-                if (vertCount < 2) continue;
-
-                for (let i = 0; i < flatPx.length; i += 2) {
-                  flatPx[i] /= w;
-                  flatPx[i + 1] /= h;
-                }
-                const midIdx = Math.floor(vertCount / 2) * 2;
-                const nx = flatPx[midIdx];
-                const ny = flatPx[midIdx + 1];
-                const distSq = (nx - 0.5) * (nx - 0.5) * 1.3 + (ny - 0.45) * (ny - 0.45) * 1.4;
-                const gentleBias = 0.68 + 0.70 * Math.exp(-distSq / 0.22);
-                const eyeFocusBoost = (nx >= 0.34 && nx <= 0.66 && ny >= 0.32 && ny <= 0.60 && totalLen <= 18) ? 1.38 : 1.0;
-                flatPx.w = Math.max(0.18, Math.min(1, avgEnergy / Math.max(1, hiThresh * 1.45)));
-
-                const cTx = Math.min(GRID_X - 1, Math.floor(nx * GRID_X));
-                const cTy = Math.min(GRID_Y - 1, Math.floor(ny * GRID_Y));
-                candidates.push({
-                  pts: flatPx,
-                  score: avgEnergy * Math.pow(totalLen, 0.72) * gentleBias * eyeFocusBoost,
-                  distCenter: Math.hypot(nx - 0.5, ny - 0.43),
-                  cell: cTy * GRID_X + cTx
-                });
-              }
-            }
-          }
-
-          collectPass(0);
-          collectPass(1);
-          collectPass(2);
-
-          candidates.sort((a, b) => b.score - a.score);
-          const picked = [];
-          const usedIdx = new Uint8Array(candidates.length);
-          const cellCounts = new Int32Array(GRID_X * GRID_Y);
-          const cellQuota = Math.max(12, Math.floor((maxStrokes * 0.60) / (GRID_X * GRID_Y)));
-
-          for (let i = 0; i < candidates.length && picked.length < maxStrokes; i++) {
-            const c = candidates[i];
-            if (cellCounts[c.cell] < cellQuota) {
-              cellCounts[c.cell]++;
-              usedIdx[i] = 1;
-              picked.push(c);
-            }
-          }
-          for (let i = 0; i < candidates.length && picked.length < maxStrokes; i++) {
-            if (!usedIdx[i]) picked.push(candidates[i]);
-          }
-
-          picked.sort((a, b) => a.distCenter - b.distCenter);
-          for (let i = 0; i < picked.length; i++) {
-            strokes.push(picked[i].pts);
-          }
-        }
-      }
-    } catch (e) {}
-
-    if (strokes.length < 18) {
-      for (let i = 0; i < 48; i++) {
-        const t = i / 48;
-        const bx = 0.14 + 0.72 * ((i * 37) % 100) / 100;
-        const by = 0.16 + 0.68 * ((i * 53) % 100) / 100;
-        const len = 0.08 + 0.14 * Math.sin(t * Math.PI);
-        const ang = (i * 0.7) % Math.PI;
-        const fallback = new Float32Array([
-          bx, by,
-          bx + Math.cos(ang) * len * 0.5, by + Math.sin(ang) * len * 0.5 - 0.03,
-          bx + Math.cos(ang) * len, by + Math.sin(ang) * len
-        ]);
-        fallback.w = 0.65;
-        strokes.push(fallback);
-      }
-    }
-    return strokes;
-  }
-
-  function createBloomSeeds() {
-    const baseRegions = [
-      [54, 42], [26, 28], [74, 66], [24, 72],
-      [76, 26], [46, 74], [16, 46], [84, 48]
-    ];
-    return baseRegions.map(([bx, by], idx) => ({
-      x: Math.max(10, Math.min(90, bx + (Math.random() - 0.5) * 14)),
-      y: Math.max(10, Math.min(90, by + (Math.random() - 0.5) * 14)),
-      delay: idx === 0 ? 0 : idx < 3 ? 0.1 + idx * 0.1 : 0.28 + (idx - 3) * 0.08,
-      speed: 0.95 + Math.random() * 0.2
-    }));
   }
 
   function clearRevealRaf() {
@@ -1037,7 +655,6 @@
     const mediaWrap = document.getElementById('agy-live-media-wrap');
     const canvas = document.getElementById('agy-sketch-reveal-canvas');
     const videoEl = document.getElementById('agy-live-bg-video');
-    const imgEl = document.getElementById('agy-live-bg-img');
     if (!layer || !mediaWrap || !canvas) return;
 
     const isVideoMode = st.wpMode === 'video';
@@ -1058,7 +675,7 @@
       layer.style.background = 'transparent';
       if (isVideoMode && videoEl && videoEl.getAttribute('data-src')) {
         layer.classList.remove('agy-bg-hidden');
-        if (videoEl.paused && videoEl.src) {
+        if (videoEl.paused && videoEl.src && !document.hidden) {
           videoEl.play().catch(() => {});
         }
       } else {
@@ -1067,203 +684,9 @@
       return;
     }
 
-    const shell = findActiveShell();
-    if (shell) shell.classList.add('agy-revealing');
-    layer.classList.remove('agy-bg-hidden');
-    layer.style.background = '#06080e';
-    canvas.style.display = 'block';
-    const rect = (shell || layer).getBoundingClientRect();
-    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
-    const cw = Math.max(320, Math.round((rect.width || window.innerWidth) * dpr));
-    const ch = Math.max(240, Math.round((rect.height || window.innerHeight) * dpr));
-    if (canvas.width !== cw || canvas.height !== ch) {
-      canvas.width = cw;
-      canvas.height = ch;
-    }
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Pick live frame or static image for contour extraction with exact cover-crop matching
-    const activeMedia = (isVideoMode && videoEl && videoEl.readyState >= 2)
-      ? videoEl
-      : (imgEl && imgEl.complete && imgEl.naturalWidth > 0 ? imgEl : null);
-    const objPos = activeMedia ? (getComputedStyle(activeMedia).objectPosition || '50% 50%') : '50% 50%';
-    let strokes = activeMedia ? extractStrokesJS(activeMedia, rect.width || window.innerWidth, rect.height || window.innerHeight, objPos, 1380) : extractStrokesJS({});
-    const seeds = createBloomSeeds();
-
-    let cacheCanvas = document.createElement('canvas');
-    cacheCanvas.width = cw;
-    cacheCanvas.height = ch;
-    let cacheCtx = cacheCanvas.getContext('2d');
-    if (cacheCtx) {
-      cacheCtx.fillStyle = '#06080e';
-      cacheCtx.fillRect(0, 0, cw, ch);
-      cacheCtx.lineCap = 'round';
-      cacheCtx.lineJoin = 'round';
-    }
-    let drawnSettled = 0;
-    let fullCacheReady = false;
-
-    window.__AGY_REVEAL_CLEANUP__ = () => {
-      strokes = null;
-      if (cacheCanvas) {
-        cacheCanvas.width = 0;
-        cacheCanvas.height = 0;
-        cacheCanvas = null;
-        cacheCtx = null;
-      }
-      if (canvas) {
-        canvas.width = 0;
-        canvas.height = 0;
-        canvas.style.display = 'none';
-      }
-    };
-
-    mediaWrap.style.webkitMaskImage = 'none';
-    mediaWrap.style.maskImage = 'none';
-    if (isVideoMode && videoEl && videoEl.paused && videoEl.src) {
-      videoEl.play().catch(() => {});
-    }
-
-    const sketchDur = 2100;
-    const bloomDur = 2150;
-    const start = performance.now();
-
-    function strokeOnePath(targetCtx, pts, wFactor, isFresh) {
-      if (!pts || pts.length < 4) return;
-      const vertCount = pts.length >> 1;
-      const alpha = isFresh ? 0.96 : (0.48 + 0.40 * wFactor);
-      targetCtx.strokeStyle = isFresh ? `rgba(255, 255, 255, ${alpha})` : `rgba(232, 239, 252, ${alpha.toFixed(2)})`;
-      targetCtx.lineWidth = (0.64 + 0.78 * wFactor) * dpr;
-      targetCtx.beginPath();
-      targetCtx.moveTo(pts[0] * cw, pts[1] * ch);
-      if (vertCount === 2) {
-        targetCtx.lineTo(pts[2] * cw, pts[3] * ch);
-      } else {
-        for (let k = 1; k < vertCount - 1; k++) {
-          const xk = pts[k * 2] * cw;
-          const yk = pts[k * 2 + 1] * ch;
-          const mx = (xk + pts[k * 2 + 2] * cw) * 0.5;
-          const my = (yk + pts[k * 2 + 3] * ch) * 0.5;
-          targetCtx.quadraticCurveTo(xk, yk, mx, my);
-        }
-        const lastOff = (vertCount - 1) * 2;
-        targetCtx.lineTo(pts[lastOff] * cw, pts[lastOff + 1] * ch);
-      }
-      targetCtx.stroke();
-    }
-
-    function drawStrokesProgress(p) {
-      const total = strokes ? strokes.length : 0;
-      const count = p >= 1 ? total : Math.max(1, Math.floor(total * p));
-      if (cacheCtx && cacheCanvas) {
-        if (p >= 1) {
-          if (!fullCacheReady && strokes) {
-            for (let i = drawnSettled; i < total; i++) {
-              const pts = strokes[i];
-              const wFactor = (pts && typeof pts.w === 'number') ? pts.w : 0.6;
-              strokeOnePath(cacheCtx, pts, wFactor, false);
-            }
-            drawnSettled = total;
-            fullCacheReady = true;
-          }
-          ctx.clearRect(0, 0, cw, ch);
-          ctx.drawImage(cacheCanvas, 0, 0);
-          return;
-        }
-        if (!strokes) return;
-        const settleLimit = Math.max(0, count - 18);
-        while (drawnSettled < settleLimit) {
-          const pts = strokes[drawnSettled];
-          const wFactor = (pts && typeof pts.w === 'number') ? pts.w : 0.6;
-          strokeOnePath(cacheCtx, pts, wFactor, false);
-          drawnSettled++;
-        }
-        ctx.clearRect(0, 0, cw, ch);
-        ctx.drawImage(cacheCanvas, 0, 0);
-        ctx.save();
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        for (let i = drawnSettled; i < count; i++) {
-          const pts = strokes[i];
-          const wFactor = (pts && typeof pts.w === 'number') ? pts.w : 0.6;
-          strokeOnePath(ctx, pts, wFactor, true);
-        }
-        ctx.restore();
-        return;
-      }
-
-      ctx.clearRect(0, 0, cw, ch);
-      ctx.fillStyle = '#06080e';
-      ctx.fillRect(0, 0, cw, ch);
-      if (!strokes) return;
-      ctx.save();
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      for (let i = 0; i < count; i++) {
-        const pts = strokes[i];
-        const wFactor = (pts && typeof pts.w === 'number') ? pts.w : 0.6;
-        strokeOnePath(ctx, pts, wFactor, i > count - 18);
-      }
-      ctx.restore();
-    }
-
-    function applySeedBloom(bp) {
-      const diag = Math.hypot(cw, ch);
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      for (let i = 0; i < seeds.length; i++) {
-        const sd = seeds[i];
-        const raw = (bp - sd.delay) / (1 - sd.delay);
-        if (raw <= 0) continue;
-        const lp = Math.min(1, raw * sd.speed);
-        const eased = lp < 0.5 ? 2 * lp * lp : 1 - Math.pow(-2 * lp + 2, 2) / 2;
-        const rad = eased * diag * 0.46;
-        const cx = (sd.x / 100) * cw;
-        const cy = (sd.y / 100) * ch;
-        const g = ctx.createRadialGradient(cx, cy, Math.max(0, rad * 0.45), cx, cy, Math.max(1, rad));
-        g.addColorStop(0, 'rgba(0,0,0,1)');
-        g.addColorStop(0.7, 'rgba(0,0,0,0.85)');
-        g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    drawStrokesProgress(0.01);
-
-    function step(now) {
-      const elapsed = now - start;
-      if (elapsed <= sketchDur) {
-        drawStrokesProgress(Math.min(1, elapsed / sketchDur));
-      } else {
-        const bp = Math.min(1, (elapsed - sketchDur) / bloomDur);
-        drawStrokesProgress(1);
-        if (fullCacheReady) strokes = null;
-        applySeedBloom(bp);
-      }
-      if (elapsed < sketchDur + bloomDur) {
-        window.__AGY_REVEAL_RAF__ = requestAnimationFrame(step);
-      } else {
-        window.__AGY_REVEAL_RAF__ = null;
-        document.querySelectorAll('.agy-shell.agy-revealing').forEach((el) => el.classList.remove('agy-revealing'));
-        if (typeof window.__AGY_REVEAL_CLEANUP__ === 'function') {
-          try { window.__AGY_REVEAL_CLEANUP__(); } catch (e) {}
-          window.__AGY_REVEAL_CLEANUP__ = null;
-        }
-        mediaWrap.style.webkitMaskImage = 'none';
-        mediaWrap.style.maskImage = 'none';
-        layer.style.background = 'transparent';
-        if (!isVideoMode || !videoEl || !videoEl.getAttribute('data-src')) {
-          layer.classList.add('agy-bg-hidden');
-        }
-      }
-    }
-
-    window.__AGY_REVEAL_RAF__ = requestAnimationFrame(step);
+    loadLazyModule('reveal')
+      .then((fn) => { if (typeof fn === 'function') fn(window.__AGY_INTERNAL__, false); })
+      .catch(() => triggerSketchBloomReveal(true));
   }
   window.__ANTIGRAVITY_REPLAY_REVEAL__ = () => triggerSketchBloomReveal(false);
 
@@ -1539,636 +962,15 @@
       return;
     }
     window.__AGY_BOOT_PLAYED__ = true;
-    teardownBootOverlay();
-
-    const starfieldUrl = sanitizeCssUrl(resolveMediaUrl(BOOT_ASSETS.starfieldBg || 'assets/starfield-boot-bg.jpg'));
-    const iconColorUrl = resolveMediaUrl(BOOT_ASSETS.agyColorIcon || 'assets/agy-icon-color.png');
-    const voiceUrls = {
-      1: resolveMediaUrl(BOOT_ASSETS.voice1 || 'assets/voice/tawa_voice1.mp3'),
-      2: resolveMediaUrl(BOOT_ASSETS.voice2 || 'assets/voice/tawa_voice2.mp3'),
-      3: resolveMediaUrl(BOOT_ASSETS.voice3 || 'assets/voice/tawa_voice3.mp3'),
-      4: resolveMediaUrl(BOOT_ASSETS.voice4 || 'assets/voice/tawa_voice4.mp3')
-    };
-
-    const bootStyle = document.createElement('style');
-    bootStyle.id = 'agy-boot-styles';
-    bootStyle.textContent = `
-      #agy-boot-overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 2147483000;
-        background: #000000;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        padding: 22px 30px;
-        font-family: ui-monospace, 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
-        color: #f4f4f5;
-        overflow: hidden;
-        transition: background-color 0.6s ease, opacity 0.65s ease;
-        user-select: none;
-      }
-      #agy-boot-overlay.hud-mode { background: #050507; }
-      #agy-boot-overlay.done { opacity: 0; pointer-events: none; }
-      #agy-boot-overlay.done.instant { display: none; transition: none; }
-
-      #agy-boot-overlay .agy-boot-starfield {
-        position: absolute;
-        inset: -8px;
-        z-index: 0;
-        background: url("${starfieldUrl}") center center / cover no-repeat;
-        filter: blur(1.2px) brightness(0.62) contrast(1.08);
-        opacity: 0;
-        transition: opacity 0.85s ease;
-        pointer-events: none;
-      }
-      #agy-boot-overlay.hud-mode .agy-boot-starfield { opacity: 0.55; }
-      #agy-boot-overlay .agy-boot-vignette {
-        position: absolute;
-        inset: 0;
-        z-index: 0;
-        background: radial-gradient(circle at 50% 48%, rgba(4,4,6,0.25) 20%, rgba(4,4,6,0.74) 100%);
-        opacity: 0;
-        transition: opacity 0.85s ease;
-        pointer-events: none;
-      }
-      #agy-boot-overlay.hud-mode .agy-boot-vignette { opacity: 1; }
-      #agy-boot-overlay .agy-splash-sheen {
-        position: absolute;
-        inset: -30%;
-        z-index: 3;
-        pointer-events: none;
-        transform: translateX(-85%);
-        background: linear-gradient(112deg, transparent 38%, rgba(255,255,255,0.06) 48%, rgba(255,255,255,0.14) 50%, rgba(255,255,255,0.05) 52%, transparent 62%);
-      }
-      #agy-boot-overlay .agy-splash-sheen.run { animation: agyDiagSheen 1.25s cubic-bezier(0.25,0.1,0.25,1) forwards; }
-      @keyframes agyDiagSheen { from { transform: translateX(-85%); } to { transform: translateX(85%); } }
-
-      #agy-boot-overlay .agy-hud-scanline {
-        position: absolute; left: 0; right: 0; height: 46px; z-index: 4; pointer-events: none; opacity: 0;
-        background: linear-gradient(180deg, transparent, rgba(255,255,255,0.08), transparent);
-      }
-      #agy-boot-overlay .agy-hud-scanline.sweep { animation: agyHudScan 0.85s ease-out forwards; }
-      @keyframes agyHudScan {
-        0% { top: 8%; opacity: 0; }
-        25% { opacity: 1; }
-        100% { top: 92%; opacity: 0; }
-      }
-
-      #agy-flash-curtain {
-        position: fixed;
-        inset: 0;
-        z-index: 2147483001;
-        pointer-events: none;
-        opacity: 0;
-        background: radial-gradient(circle at 82% 85%, rgba(255,255,255,0.96) 0%, rgba(212,212,216,0.78) 48%, rgba(161,161,170,0.55) 100%);
-      }
-      #agy-flash-curtain.burst { animation: agyFlashBurst 1.15s cubic-bezier(0.22,1,0.36,1) forwards; }
-      @keyframes agyFlashBurst { 0% { opacity: 0; } 28% { opacity: 0.92; } 100% { opacity: 0; } }
-
-      #agy-boot-overlay .agy-boot-header,
-      #agy-boot-overlay .agy-boot-footer {
-        position: relative; z-index: 5; display: flex; justify-content: space-between;
-        font-size: 10.5px; letter-spacing: 0.14em; color: #71717a; opacity: 0; transition: opacity 0.45s ease;
-      }
-      #agy-boot-overlay .agy-boot-header { align-items: flex-start; }
-      #agy-boot-overlay .agy-boot-footer { align-items: center; padding-bottom: 18px; }
-      #agy-boot-overlay.hud-mode .agy-boot-header,
-      #agy-boot-overlay.hud-mode .agy-boot-footer { opacity: 1; }
-
-      #agy-boot-overlay .agy-boot-brand { display: flex; flex-direction: column; gap: 3px; }
-      #agy-boot-overlay .agy-boot-brand strong {
-        font-size: 14px; color: #ffffff; letter-spacing: 0.16em;
-        font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; font-weight: 700;
-      }
-      #agy-boot-overlay .agy-boot-brand .sub-line { font-size: 9px; color: #71717a; letter-spacing: 0.22em; }
-      #agy-boot-overlay .agy-boot-rev { margin-top: 10px; font-size: 9.5px; color: #52525b; display: flex; align-items: center; gap: 8px; }
-      #agy-boot-overlay .agy-boot-rev .blue-rev { color: #60a5fa; }
-
-      #agy-boot-overlay .agy-boot-skip {
-        cursor: pointer; background: transparent; border: none; color: #71717a;
-        padding: 4px 8px; font-family: inherit; font-size: 10.5px; letter-spacing: 0.16em; transition: color 0.15s ease;
-      }
-      #agy-boot-overlay .agy-boot-skip:hover { color: #ffffff; }
-
-      #agy-boot-overlay .agy-boot-stage-wrap {
-        position: relative; z-index: 5; flex: 1; display: flex; align-items: center; justify-content: center;
-      }
-      #agy-boot-overlay .agy-boot-stage {
-        display: none; flex-direction: column; align-items: center; text-align: center; max-width: 560px; width: 100%;
-      }
-      #agy-boot-overlay .agy-boot-stage.active { display: flex; }
-
-      #agy-boot-overlay .agy-stagger-char {
-        display: inline-block; opacity: 0; transform: translateY(2px); filter: blur(1.5px);
-        animation: agyCharFadeIn 0.24s cubic-bezier(0.22,1,0.36,1) forwards;
-      }
-      #agy-boot-overlay .agy-stagger-space { display: inline-block; width: 0.32em; }
-      @keyframes agyCharFadeIn { to { opacity: 1; transform: translateY(0); filter: blur(0); } }
-      #agy-boot-overlay .wipe-out { opacity: 0; transition: opacity 0.28s ease; }
-      #agy-boot-overlay .stage-fade-out { opacity: 0 !important; transform: scale(1.06); transition: opacity 0.58s ease, transform 0.58s cubic-bezier(0.22,1,0.36,1); }
-      #agy-boot-overlay .agy-welcome-reveal { opacity: 0; transform: translateY(6px); animation: agyWelcomeIn 0.48s cubic-bezier(0.22,1,0.36,1) forwards; }
-      @keyframes agyWelcomeIn { to { opacity: 1; transform: translateY(0); } }
-
-      #agy-boot-overlay .agy-splash-logo {
-        width: 68px; height: 68px; object-fit: contain; margin-bottom: 16px; opacity: 0;
-        filter: drop-shadow(0 0 22px rgba(255,255,255,0.18)); animation: agySplashFade 2.5s ease forwards;
-      }
-      #agy-boot-overlay .agy-splash-wordmark {
-        font-family: 'Segoe UI', system-ui, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: 0.42em;
-        color: #ffffff; margin-bottom: 5px; opacity: 0; animation: agySplashFade 2.5s ease 0.15s forwards;
-      }
-      #agy-boot-overlay .agy-splash-caption {
-        font-size: 9px; letter-spacing: 0.36em; color: #71717a; opacity: 0; animation: agySplashFade 2.5s ease 0.25s forwards;
-      }
-      @keyframes agySplashFade {
-        0% { opacity: 0; transform: scale(0.95); }
-        20% { opacity: 1; transform: scale(1); }
-        76% { opacity: 1; }
-        100% { opacity: 0; }
-      }
-
-      #agy-boot-overlay .agy-hud-title {
-        font-family: 'Segoe UI', system-ui, sans-serif; font-size: 26px; font-weight: 400; letter-spacing: 0.22em; color: #f4f4f5;
-      }
-      #agy-boot-overlay .agy-hud-subtitle { font-size: 10.5px; letter-spacing: 0.38em; color: #8c8c94; margin-bottom: 30px; }
-      #agy-boot-overlay .agy-hud-btn {
-        position: relative; overflow: hidden; cursor: pointer; background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.34); color: #e4e4e7; padding: 9px 26px;
-        font-family: inherit; font-size: 11px; letter-spacing: 0.2em; transition: border-color 0.2s ease, color 0.2s ease;
-      }
-      #agy-boot-overlay .agy-hud-btn::before {
-        content: ''; position: absolute; inset: 0; background: #ffffff; transform: scaleX(0); transform-origin: left center;
-        transition: transform 0.28s cubic-bezier(0.22,1,0.36,1); z-index: 0;
-      }
-      #agy-boot-overlay .agy-hud-btn span { position: relative; z-index: 1; }
-      #agy-boot-overlay .agy-hud-btn:hover::before,
-      #agy-boot-overlay .agy-hud-btn.triggered::before { transform: scaleX(1); }
-      #agy-boot-overlay .agy-hud-btn:hover,
-      #agy-boot-overlay .agy-hud-btn.triggered { color: #000000; border-color: #ffffff; }
-      #agy-boot-overlay .agy-hud-hint { margin-top: 12px; font-size: 9.5px; color: #52525b; letter-spacing: 0.14em; }
-
-      #agy-boot-overlay .agy-id-table { width: 290px; padding: 12px 0; margin-bottom: 22px; display: flex; flex-direction: column; gap: 7px; font-size: 10.5px; }
-      #agy-boot-overlay .agy-id-row { display: flex; justify-content: space-between; align-items: center; }
-      #agy-boot-overlay .agy-id-row span:first-child { color: #52525b; letter-spacing: 0.14em; }
-      #agy-boot-overlay .agy-id-row span:last-child { color: #f4f4f5; font-weight: 600; letter-spacing: 0.16em; }
-
-      #agy-boot-overlay .agy-icon-morph-box { position: relative; width: 112px; height: 112px; margin: 8px 0 14px; display: flex; align-items: center; justify-content: center; }
-      #agy-boot-overlay .agy-icon-outline-svg { position: absolute; inset: 0; width: 100%; height: 100%; transition: opacity 0.45s ease; }
-      #agy-boot-overlay .agy-icon-outline-svg.fade-stroke { opacity: 0; }
-      #agy-boot-overlay .agy-icon-outline-path { fill: none; stroke: url(#agyBootStrokeGrad); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 6px rgba(255,255,255,0.28)); }
-      #agy-boot-overlay .agy-icon-outline-path.trace { animation: agyTraceOutline 1.05s cubic-bezier(0.35,0.05,0.25,1) forwards; }
-      @keyframes agyTraceOutline { to { stroke-dashoffset: 0; } }
-      #agy-boot-overlay .agy-icon-color-fill {
-        position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: fill;
-        clip-path: inset(85% 0 0 0); opacity: 0;
-        transition: clip-path 1.05s cubic-bezier(0.35,0.05,0.25,1), opacity 0.12s ease, filter 0.45s ease;
-      }
-      #agy-boot-overlay .agy-icon-color-fill.filled { clip-path: inset(13% 0 0 0); opacity: 1; filter: drop-shadow(0 0 14px rgba(59,130,246,0.28)); }
-
-      #agy-boot-overlay .agy-dot-grid-small { font-size: 10px; letter-spacing: 0.48em; color: #52525b; line-height: 1.8; }
-      #agy-boot-overlay .agy-hex-column {
-        position: absolute; right: 36px; top: 50%; transform: translateY(-50%); font-size: 9.5px; line-height: 1.85;
-        color: rgba(255,255,255,0.24); letter-spacing: 0.16em; text-align: right; pointer-events: none; opacity: 0; transition: opacity 0.3s ease;
-      }
-      #agy-boot-overlay .agy-hex-column.visible { opacity: 1; }
-
-      #agy-boot-overlay .agy-verify-ring-stage { position: relative; width: 390px; height: 390px; display: flex; align-items: center; justify-content: center; }
-      #agy-boot-overlay .agy-arc-svg { position: absolute; inset: 0; width: 100%; height: 100%; animation: agySpinCW 4.2s linear infinite; }
-      #agy-boot-overlay .agy-arc-svg-inner { position: absolute; inset: 28px; width: calc(100% - 56px); height: calc(100% - 56px); animation: agySpinCCW 5.5s linear infinite; }
-      #agy-boot-overlay .agy-orbit-dots { position: absolute; inset: 42px; border-radius: 50%; animation: agySpinCW 3.4s linear infinite; }
-      #agy-boot-overlay .agy-orbit-dot { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: #60a5fa; }
-      #agy-boot-overlay .agy-orbit-dot.w { background: #ffffff; width: 3px; height: 3px; }
-      @keyframes agySpinCW { to { transform: rotate(360deg); } }
-      @keyframes agySpinCCW { to { transform: rotate(-360deg); } }
-
-      #agy-boot-overlay .agy-welcome-eyebrow { font-size: 16px; font-weight: 700; letter-spacing: 0.26em; color: #f4f4f5; margin-bottom: 10px; }
-      #agy-boot-overlay .agy-welcome-solid-box {
-        background: #ffffff; color: #050505; padding: 4px 18px; font-family: 'Segoe UI', system-ui, sans-serif;
-        font-size: 17px; font-weight: 800; letter-spacing: 0.16em; margin-bottom: 22px; box-shadow: 0 0 28px rgba(255,255,255,0.22);
-      }
-      #agy-boot-overlay .agy-welcome-flare-wrap { position: relative; width: 260px; height: 58px; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
-      #agy-boot-overlay .agy-welcome-flare-wrap img { width: 46px; height: 46px; object-fit: contain; position: relative; z-index: 2; }
-
-      #agy-boot-overlay .agy-bottom-progress-track {
-        position: absolute; left: 50%; transform: translateX(-50%); width: 33.33vw; max-width: 440px;
-        bottom: 4px; height: 2px; background: rgba(255,255,255,0.12);
-      }
-      #agy-boot-overlay .agy-bottom-progress-bar { width: 0%; height: 100%; background: #ffffff; transition: width 0.55s cubic-bezier(0.22,1,0.36,1); }
-      #agy-boot-overlay .agy-eq-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; margin-right: 10px; }
-      #agy-boot-overlay .agy-eq-bars span { width: 2px; background: #60a5fa; animation: agyEqPulse 0.9s ease-in-out infinite alternate; }
-      #agy-boot-overlay .agy-eq-bars span:nth-child(2) { animation-delay: 0.2s; }
-      #agy-boot-overlay .agy-eq-bars span:nth-child(3) { animation-delay: 0.4s; }
-      @keyframes agyEqPulse { from { height: 3px; opacity: 0.45; } to { height: 11px; opacity: 1; } }
-    `;
-    document.head.appendChild(bootStyle);
-
-    const flashCurtain = document.createElement('div');
-    flashCurtain.id = 'agy-flash-curtain';
-    document.body.appendChild(flashCurtain);
-
-    const overlay = document.createElement('section');
-    overlay.id = 'agy-boot-overlay';
-    overlay.setAttribute('aria-label', 'Boot Sequence');
-    overlay.innerHTML = `
-      <div class="agy-boot-starfield"></div>
-      <div class="agy-boot-vignette"></div>
-      <div class="agy-splash-sheen" id="agy-splash-sheen"></div>
-      <div class="agy-hud-scanline" id="agy-hud-scanline"></div>
-
-      <header class="agy-boot-header">
-        <div class="agy-boot-brand">
-          <strong>ANTIGRAVITY</strong>
-          <span class="sub-line">SYNTHESIZE INTELLIGENCE</span>
-          <div class="agy-boot-rev">
-            <span>REV 0.1.9</span>
-            <span>•</span>
-            <span class="blue-rev" id="agy-hud-clock">WEB PROFILE 00:00:00</span>
-          </div>
-        </div>
-        <button class="agy-boot-skip" id="agy-boot-skip" type="button">SKIP ▸</button>
-      </header>
-
-      <div class="agy-boot-stage-wrap">
-        <div class="agy-boot-stage active" id="agy-stage-0">
-          <img class="agy-splash-logo" id="agy-splash-logo" src="${iconColorUrl}" alt="Antigravity" />
-          <div class="agy-splash-wordmark">ANTIGRAVITY</div>
-          <div class="agy-splash-caption">SYNTHESIZE INTELLIGENCE</div>
-        </div>
-
-        <div class="agy-boot-stage" id="agy-stage-1">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">YÊU CẦU QUYỀN TRUY CẬP</span></div>
-          <div class="agy-hud-subtitle" data-stagger="14">ACCESS PERMISSION REQUIRED</div>
-          <button class="agy-hud-btn" id="agy-btn-grant" type="button">
-            <span>CẤP QUYỀN &nbsp; GRANT ACCESS</span>
-          </button>
-          <div class="agy-hud-hint">Nhấn Enter / Space hoặc bấm nút để tiếp tục</div>
-        </div>
-
-        <div class="agy-boot-stage" id="agy-stage-2">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">XÁC MINH DANH TÍNH</span></div>
-          <div class="agy-hud-subtitle" data-stagger="14">IDENTITY VERIFICATION</div>
-          <div class="agy-id-table">
-            <div class="agy-id-row"><span>TÊN TRUY CẬP / OPERATOR</span><span>SENSEI</span></div>
-            <div class="agy-id-row"><span>MÃ ĐỊNH DANH / UID</span><span>0042</span></div>
-            <div class="agy-id-row"><span>CẤP QUYỀN / LEVEL</span><span>∞</span></div>
-          </div>
-          <button class="agy-hud-btn" id="agy-btn-confirm" type="button">
-            <span>XÁC NHẬN &nbsp; CONFIRM IDENTITY</span>
-          </button>
-          <div class="agy-hud-hint">Nhấn Enter / Space hoặc bấm nút để xác nhận</div>
-        </div>
-
-        <div class="agy-boot-stage" id="agy-stage-morph">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" id="agy-morph-title" data-stagger="16">ĐANG TIẾP NHẬN YÊU CẦU</span></div>
-          <div class="agy-hud-subtitle" id="agy-morph-sub" data-stagger="10" style="margin-bottom:10px">ACCESS REQUEST RECEIVED</div>
-          <div class="agy-icon-morph-box">
-            <svg class="agy-icon-outline-svg" id="agy-icon-outline-svg" viewBox="0 0 256 256">
-              <defs>
-                <linearGradient id="agyBootStrokeGrad" x1="10%" y1="90%" x2="88%" y2="12%">
-                  <stop offset="0%" stop-color="#3b82f6" />
-                  <stop offset="38%" stop-color="#22c55e" />
-                  <stop offset="68%" stop-color="#f59e0b" />
-                  <stop offset="86%" stop-color="#ef4444" />
-                  <stop offset="100%" stop-color="#3b82f6" />
-                </linearGradient>
-              </defs>
-              <path
-                id="agy-boot-outline-path"
-                class="agy-icon-outline-path"
-                d="M 116.50,42.00 Q 111.00,44.00 105.00,49.50 Q 99.00,55.00 94.00,64.00 Q 89.00,73.00 74.50,119.50 Q 60.00,166.00 53.50,178.00 Q 47.00,190.00 40.00,198.00 Q 33.00,206.00 32.50,209.00 Q 32.00,212.00 34.00,213.50 Q 36.00,215.00 39.00,215.00 Q 42.00,215.00 49.00,211.00 Q 56.00,207.00 64.50,198.00 Q 73.00,189.00 82.50,173.00 Q 92.00,157.00 98.00,149.50 Q 104.00,142.00 110.00,138.50 Q 116.00,135.00 125.50,134.50 Q 135.00,134.00 141.50,137.00 Q 148.00,140.00 152.50,144.50 Q 157.00,149.00 169.00,168.50 Q 181.00,188.00 187.50,195.50 Q 194.00,203.00 200.50,208.00 Q 207.00,213.00 210.00,214.00 Q 213.00,215.00 216.50,214.50 Q 220.00,214.00 221.00,213.00 Q 222.00,212.00 221.50,208.50 Q 221.00,205.00 212.00,194.00 Q 203.00,183.00 197.00,170.00 Q 191.00,157.00 182.50,127.00 Q 174.00,97.00 166.50,78.50 Q 159.00,60.00 153.50,53.50 Q 148.00,47.00 144.00,44.50 Q 140.00,42.00 131.00,41.00 Q 122.00,40.00 116.50,42.00 Z"
-              />
-            </svg>
-            <img id="agy-boot-color-fill" class="agy-icon-color-fill" src="${iconColorUrl}" alt="Antigravity" />
-          </div>
-          <div class="agy-dot-grid-small">ANTIGRAVITY<br />· · · · · · · · · ·</div>
-        </div>
-
-        <div class="agy-boot-stage" id="agy-stage-5">
-          <div class="agy-verify-ring-stage">
-            <svg class="agy-arc-svg" viewBox="0 0 320 320">
-              <circle cx="160" cy="160" r="146" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-dasharray="430 140 160 220" stroke-linecap="round" />
-              <circle cx="160" cy="14" r="4.5" fill="#ffffff" />
-            </svg>
-            <svg class="agy-arc-svg-inner" viewBox="0 0 264 264">
-              <circle cx="132" cy="132" r="122" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="1" stroke-dasharray="6 10" />
-            </svg>
-            <div class="agy-orbit-dots">
-              <div class="agy-orbit-dot" style="top:12%;left:32%"></div>
-              <div class="agy-orbit-dot w" style="top:28%;right:14%"></div>
-              <div class="agy-orbit-dot" style="bottom:18%;left:22%"></div>
-              <div class="agy-orbit-dot w" style="bottom:24%;right:28%"></div>
-            </div>
-            <div>
-              <div class="agy-hud-title" data-stagger="24" style="font-size:17px;letter-spacing:0.1em;margin-bottom:6px">HOÀN TẤT · ĐÃ XÁC THỰC</div>
-              <div class="agy-hud-subtitle" data-stagger="14" style="margin-bottom:0;font-size:9px;letter-spacing:0.24em">READ COMPLETE · VERIFIED</div>
-            </div>
-          </div>
-        </div>
-
-        <div class="agy-boot-stage" id="agy-stage-6">
-          <div class="agy-welcome-eyebrow" data-stagger="28">WELCOME TO</div>
-          <div class="agy-welcome-solid-box agy-welcome-reveal" style="animation-delay:240ms">ANTIGRAVITY</div>
-          <div class="agy-welcome-flare-wrap agy-welcome-reveal" style="animation-delay:360ms">
-            <img src="${iconColorUrl}" alt="Antigravity" />
-          </div>
-          <div class="agy-dot-grid-small agy-welcome-reveal" style="margin-bottom:8px;animation-delay:460ms">A N T I G R A V I T Y</div>
-          <div class="agy-hud-hint agy-welcome-reveal" style="color:#a1a1aa;letter-spacing:0.2em;animation-delay:540ms">CHÀO MỪNG SENSEI • SESSION READY</div>
-        </div>
-      </div>
-
-      <div class="agy-hex-column" id="agy-hex-column"></div>
-
-      <footer class="agy-boot-footer">
-        <div style="display:flex;align-items:center">
-          <div class="agy-eq-bars"><span></span><span></span><span></span></div>
-          <span id="agy-boot-step-label">[ 01 / 06 ] AUTHORIZATION</span>
-        </div>
-        <span id="agy-boot-status-bottom">AWAITING OPERATOR CONSENT</span>
-        <span>ID CONFIRMED : 0042</span>
-        <div class="agy-bottom-progress-track">
-          <div class="agy-bottom-progress-bar" id="agy-bottom-progress"></div>
-        </div>
-      </footer>
-    `;
-    document.body.appendChild(overlay);
-
-    const splashSheen = document.getElementById('agy-splash-sheen');
-    const hudScanline = document.getElementById('agy-hud-scanline');
-    const stepLabel = document.getElementById('agy-boot-step-label');
-    const statusBottom = document.getElementById('agy-boot-status-bottom');
-    const bottomProgress = document.getElementById('agy-bottom-progress');
-    const hexColumn = document.getElementById('agy-hex-column');
-    const hudClock = document.getElementById('agy-hud-clock');
-    const morphTitle = document.getElementById('agy-morph-title');
-    const morphSub = document.getElementById('agy-morph-sub');
-    const iconOutlineSvg = document.getElementById('agy-icon-outline-svg');
-    const outlinePath = document.getElementById('agy-boot-outline-path');
-    const colorFillImg = document.getElementById('agy-boot-color-fill');
-    const outlineTotalLen = Math.ceil(outlinePath.getTotalLength() || 673);
-    outlinePath.style.strokeDasharray = `${outlineTotalLen}`;
-    outlinePath.style.strokeDashoffset = `${outlineTotalLen}`;
-
-    let currentStage = 0;
-    let bootActx = null;
-    const bootStartMs = performance.now();
-
-    function playClickSfx(freq = 640, dur = 0.06, vol = 0.045) {
-      try {
-        bootActx = bootActx || new (window.AudioContext || window.webkitAudioContext)();
-        if (bootActx.state === 'suspended') bootActx.resume();
-        const osc = bootActx.createOscillator();
-        const g = bootActx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, bootActx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(freq * 1.45, bootActx.currentTime + dur);
-        g.gain.setValueAtTime(vol, bootActx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, bootActx.currentTime + dur);
-        osc.connect(g);
-        g.connect(bootActx.destination);
-        osc.start();
-        osc.stop(bootActx.currentTime + dur);
-      } catch (e) {}
-    }
-
-    function playTawaVoice(slotNum) {
-      stopBootAudio();
-      const src = voiceUrls[slotNum];
-      if (!src) return;
-      try {
-        const audio = new Audio(src);
-        audio.volume = 0.92;
-        window.__AGY_BOOT_AUDIO__ = audio;
-        audio.play().catch(() => {});
-      } catch (e) {}
-    }
-
-    function triggerScanline() {
-      hudScanline.classList.remove('sweep');
-      void hudScanline.offsetWidth;
-      hudScanline.classList.add('sweep');
-    }
-
-    function startHexStream(active) {
-      if (window.__AGY_BOOT_HEX__) {
-        clearInterval(window.__AGY_BOOT_HEX__);
-        window.__AGY_BOOT_HEX__ = null;
-      }
-      hexColumn.classList.toggle('visible', active);
-      if (!active) return;
-      const gen = () => {
-        const lines = [];
-        for (let i = 0; i < 6; i++) {
-          const val = Math.floor(Math.random() * 0xffff).toString(16).toUpperCase().padStart(4, '0');
-          lines.push(`0x${val} :: READ`);
-        }
-        hexColumn.innerHTML = lines.join('<br>');
-      };
-      gen();
-      window.__AGY_BOOT_HEX__ = setInterval(gen, 110);
-    }
-
-    function applyCharStagger(el, stepMs = 24, baseDelayMs = 0) {
-      if (!el) return;
-      const raw = el.dataset.rawText || el.textContent.trim();
-      el.dataset.rawText = raw;
-      el.innerHTML = '';
-      Array.from(raw).forEach((ch, idx) => {
-        if (ch === ' ') {
-          const sp = document.createElement('span');
-          sp.className = 'agy-stagger-space';
-          el.appendChild(sp);
-        } else {
-          const span = document.createElement('span');
-          span.className = 'agy-stagger-char';
-          span.textContent = ch;
-          span.style.animationDelay = `${baseDelayMs + idx * stepMs}ms`;
-          el.appendChild(span);
-        }
+    loadLazyModule('boot')
+      .then((fn) => { if (typeof fn === 'function') fn(window.__AGY_INTERNAL__, forceReplay); })
+      .catch(() => {
+        window.__AGY_BOOT_FINISHED__ = true;
+        scheduleRevealWhenReady(true);
       });
-    }
-
-    function showStage(idx, withCharAnim = true) {
-      currentStage = idx;
-      const ids = ['agy-stage-0', 'agy-stage-1', 'agy-stage-2', 'agy-stage-morph', 'agy-stage-morph', 'agy-stage-5', 'agy-stage-6'];
-      const targetId = ids[idx];
-      ['agy-stage-0', 'agy-stage-1', 'agy-stage-2', 'agy-stage-morph', 'agy-stage-5', 'agy-stage-6'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.classList.remove('wipe-out', 'stage-fade-out');
-        el.classList.toggle('active', id === targetId);
-      });
-      if (withCharAnim && idx > 0) {
-        const activeEl = document.getElementById(targetId);
-        if (activeEl) {
-          activeEl.querySelectorAll('[data-stagger]').forEach((el, tIdx) => {
-            applyCharStagger(el, parseInt(el.getAttribute('data-stagger') || '24', 10), tIdx * 90);
-          });
-        }
-      }
-      const meta = [
-        ['[ 00 / 06 ] INITIALIZING', 'LOADING KERNEL...', 10],
-        ['[ 01 / 06 ] AUTHORIZATION', 'AWAITING OPERATOR CONSENT', 24],
-        ['[ 02 / 06 ] IDENTITY CHECK', 'UID 0042 / LEVEL ∞ READY', 42],
-        ['[ 03 / 06 ] ACCESS VECTOR', 'SYNCHRONIZING NEURAL CORE', 58],
-        ['[ 04 / 06 ] PERMISSION STREAM', 'STREAMING CLEARANCE KEYS', 74],
-        ['[ 05 / 06 ] VERIFY', 'PERMISSION AUTHORIZED', 90],
-        ['[ 06 / 06 ] WELCOME', 'SENSEI SESSION ACTIVE', 100]
-      ];
-      stepLabel.textContent = meta[idx][0];
-      statusBottom.textContent = meta[idx][1];
-      bottomProgress.style.width = `${meta[idx][2]}%`;
-    }
-
-    function finishBoot(instant = false) {
-      clearBootTimers();
-      startHexStream(false);
-      window.__AGY_BOOT_FINISHED__ = true;
-      if (instant) {
-        stopBootAudio();
-        overlay.classList.add('done', 'instant');
-        scheduleRevealWhenReady(false);
-        return;
-      }
-      flashCurtain.classList.remove('burst');
-      void flashCurtain.offsetWidth;
-      flashCurtain.classList.add('burst');
-      window.__AGY_BOOT_TIMERS__.push(
-        setTimeout(() => {
-          overlay.classList.add('done');
-          scheduleRevealWhenReady(false);
-          window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-            overlay.style.display = 'none';
-          }, 700));
-        }, 340)
-      );
-    }
-
-    function runAutoSequenceAfterConfirm() {
-      morphTitle.dataset.rawText = 'ĐANG TIẾP NHẬN YÊU CẦU';
-      morphTitle.textContent = 'ĐANG TIẾP NHẬN YÊU CẦU';
-      morphSub.dataset.rawText = 'ACCESS REQUEST RECEIVED';
-      morphSub.textContent = 'ACCESS REQUEST RECEIVED';
-      iconOutlineSvg.classList.remove('fade-stroke');
-      colorFillImg.classList.remove('filled');
-      outlinePath.classList.remove('trace');
-      outlinePath.style.strokeDashoffset = String(outlineTotalLen);
-      showStage(3, true);
-      void outlinePath.offsetWidth;
-      outlinePath.classList.add('trace');
-      playClickSfx(520, 0.06, 0.045);
-
-      let fillPhaseStarted = false;
-      const startColorFillStage = () => {
-        if (fillPhaseStarted || !overlay.isConnected || overlay.classList.contains('done')) return;
-        fillPhaseStarted = true;
-
-        // Fill immediately on stroke completion while swapping the caption concurrently
-        morphTitle.dataset.rawText = 'BẮT ĐẦU ĐỌC QUYỀN HẠN';
-        morphTitle.textContent = 'BẮT ĐẦU ĐỌC QUYỀN HẠN';
-        morphSub.dataset.rawText = 'PERMISSION READ STARTED';
-        morphSub.textContent = 'PERMISSION READ STARTED';
-        showStage(4, true);
-        startHexStream(true);
-        void colorFillImg.offsetWidth;
-        colorFillImg.classList.add('filled');
-        playClickSfx(620, 0.05, 0.04);
-
-        window.__AGY_BOOT_TIMERS__.push(setTimeout(() => iconOutlineSvg.classList.add('fade-stroke'), 520));
-
-        window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-          startHexStream(false);
-          showStage(5, true);
-          triggerScanline();
-          playClickSfx(780, 0.08, 0.05);
-          playTawaVoice(3);
-        }, 1250));
-
-        window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-          const st5 = document.getElementById('agy-stage-5');
-          if (st5) st5.classList.add('stage-fade-out');
-        }, 2950));
-
-        window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-          showStage(6, true);
-          playClickSfx(880, 0.1, 0.045);
-          playTawaVoice(4);
-        }, 3620));
-
-        window.__AGY_BOOT_TIMERS__.push(setTimeout(() => finishBoot(false), 5850));
-      };
-
-      outlinePath.addEventListener('animationend', startColorFillStage, { once: true });
-      window.__AGY_BOOT_TIMERS__.push(setTimeout(startColorFillStage, 1080));
-    }
-
-    window.__AGY_BOOT_CLOCK__ = setInterval(() => {
-      const sec = Math.floor((performance.now() - bootStartMs) / 1000);
-      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
-      const ss = String(sec % 60).padStart(2, '0');
-      hudClock.textContent = `WEB PROFILE 00:${mm}:${ss}`;
-    }, 250);
-
-    showStage(0, false);
-    window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-      splashSheen.classList.remove('run');
-      void splashSheen.offsetWidth;
-      splashSheen.classList.add('run');
-    }, 1050));
-
-    window.__AGY_BOOT_TIMERS__.push(setTimeout(() => {
-      overlay.classList.add('hud-mode');
-      showStage(1, true);
-      triggerScanline();
-    }, 2600));
-
-    document.getElementById('agy-btn-grant').addEventListener('click', (e) => {
-      if (currentStage !== 1) return;
-      e.currentTarget.classList.add('triggered');
-      playClickSfx(680, 0.06, 0.05);
-      playTawaVoice(1);
-      const st1 = document.getElementById('agy-stage-1');
-      window.__AGY_BOOT_TIMERS__.push(setTimeout(() => st1 && st1.classList.add('wipe-out'), 240));
-      window.__AGY_BOOT_TIMERS__.push(setTimeout(() => showStage(2, true), 580));
-    });
-
-    document.getElementById('agy-btn-confirm').addEventListener('click', (e) => {
-      if (currentStage !== 2) return;
-      e.currentTarget.classList.add('triggered');
-      playClickSfx(820, 0.06, 0.05);
-      playTawaVoice(2);
-      const st2 = document.getElementById('agy-stage-2');
-      window.__AGY_BOOT_TIMERS__.push(setTimeout(() => st2 && st2.classList.add('wipe-out'), 240));
-      window.__AGY_BOOT_TIMERS__.push(setTimeout(() => runAutoSequenceAfterConfirm(), 580));
-    });
-
-    document.getElementById('agy-boot-skip').addEventListener('click', () => finishBoot(true));
-
-    window.__AGY_BOOT_KEYDOWN__ = (e) => {
-      if (overlay.classList.contains('done')) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        if (currentStage === 1) {
-          e.preventDefault();
-          e.stopPropagation();
-          const btn = document.getElementById('agy-btn-grant');
-          if (btn) btn.click();
-        } else if (currentStage === 2) {
-          e.preventDefault();
-          e.stopPropagation();
-          const btn = document.getElementById('agy-btn-confirm');
-          if (btn) btn.click();
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        finishBoot(true);
-      }
-    };
-    window.addEventListener('keydown', window.__AGY_BOOT_KEYDOWN__, true);
   }
   window.__ANTIGRAVITY_REPLAY_BOOT__ = () => mountBootSequence(true);
 
-  /** Embed local Mali 500 handwriting WOFF2 subsets once to avoid re-parsing on theme slider drags. */
   function ensureGreetingFonts() {
     if (document.getElementById('agy-greeting-font-style')) return;
     const host = document.head || document.documentElement;
@@ -2260,6 +1062,7 @@
         localStorage.setItem(STORAGE_AVATAR_RADIUS, String(overrides.avatarRadius));
       }
     } catch (e) {}
+    window.__AGY_STATE_CACHE__ = st;
 
     if (!opts.skipSave) {
       persistThemeConfig(st, Boolean(opts.debounceSave));
@@ -2270,9 +1073,6 @@
     const wpUrl = toShortBlobUrl(resolveMediaUrl(st.customWp || mainTheme.wallpaper || ''));
     const wpVideoUrl = resolveMediaUrl(st.customVideo || mainTheme.wallpaperVideo || '');
     const isVideoMode = Boolean(st.wpEnabled && st.wpMode === 'video' && wpVideoUrl);
-
-    const oldLegacy = document.getElementById('antigravity-ho-ly-chibi-theme');
-    if (oldLegacy) oldLegacy.remove();
 
     let styleEl = document.getElementById('antigravity-custom-theme-active');
     if (!styleEl) {
@@ -2685,25 +1485,6 @@
 
     const sidePanelCss = st.wpEnabled ? `
       /* Frosted pre-baked glass + dark/light reading scrim for right-side Artifact / Text / Diff split panels */
-      ${useUnifiedGlass ? `
-      .agy-shell[data-agy-side-glass="1"]::before {
-        clip-path: polygon(
-          evenodd,
-          0 0,
-          100% 0,
-          100% var(--agy-hdr-h, 75px),
-          var(--agy-sidebar-w, 256px) var(--agy-hdr-h, 75px),
-          var(--agy-sidebar-w, 256px) 100%,
-          0 100%,
-          0 0,
-          var(--agy-side-l, 100%) var(--agy-side-t, 75px),
-          var(--agy-side-r, 100%) var(--agy-side-t, 75px),
-          var(--agy-side-r, 100%) var(--agy-side-b, 100%),
-          var(--agy-side-l, 100%) var(--agy-side-b, 100%),
-          var(--agy-side-l, 100%) var(--agy-side-t, 75px)
-        ) !important;
-      }
-      ` : ''}
       body:not([data-has-browser-hole="true"]) .agy-shell [data-side-panel-body="true"]:not([data-has-browser-hole="true"]):not([data-agy-has-hole="1"]) {
         background: ${mainTheme.aiCardBg || `rgba(${overlayRgb}, 0.72)`} !important;
         ${isLight ? `color: ${uiInk} !important;` : ''}
@@ -2747,7 +1528,6 @@
         background-image: none;
         ` : `
         background-color: ${mainTheme.headerBg};
-        background-image: var(--agy-l-glass-bg, none);
         background-size: cover;
         background-position: ${bgPosition};
         background-repeat: no-repeat;
@@ -2755,14 +1535,6 @@
         backdrop-filter: none !important;
         transition: opacity 0.28s ease;
         will-change: transform;
-        clip-path: polygon(
-          0 0,
-          100% 0,
-          100% var(--agy-hdr-h, 75px),
-          var(--agy-sidebar-w, 256px) var(--agy-hdr-h, 75px),
-          var(--agy-sidebar-w, 256px) 100%,
-          0 100%
-        );
       }
       .agy-shell.agy-revealing::before {
         opacity: 0 !important;
@@ -3077,6 +1849,10 @@
       cancelAnimationFrame(window.__AGY_TICK_RAF__);
       window.__AGY_TICK_RAF__ = 0;
     }
+    if (window.__AGY_TICK_TIMER__) {
+      clearTimeout(window.__AGY_TICK_TIMER__);
+      window.__AGY_TICK_TIMER__ = 0;
+    }
     if (window.__AGY_SHELL_RO__) {
       try { window.__AGY_SHELL_RO__.disconnect(); } catch (e) {}
       window.__AGY_SHELL_RO__ = null;
@@ -3089,6 +1865,9 @@
       window.__AGY_MODAL_AC__ = null;
     }
     revokeAllAgyBlobs();
+    invalidateStateCache();
+    window.__AGY_METRICS_STATE__ = null;
+    window.__AGY_LAST_METRICS_CSS__ = '';
     document.querySelectorAll('.agy-table-scroll-wrap').forEach((el) => el.classList.remove('agy-table-scroll-wrap'));
     document.querySelectorAll('[data-agy-tbl-wrapped]').forEach((el) => delete el.dataset.agyTblWrapped);
     document.querySelectorAll('[data-agy-has-hole]').forEach((el) => delete el.dataset.agyHasHole);
@@ -3096,6 +1875,8 @@
     if (liveBgLayer) liveBgLayer.remove();
     const styleEl = document.getElementById('antigravity-custom-theme-active');
     if (styleEl) styleEl.remove();
+    const metricsEl = document.getElementById('antigravity-custom-theme-metrics');
+    if (metricsEl) metricsEl.remove();
     const fontStyleEl = document.getElementById('agy-greeting-font-style');
     if (fontStyleEl) fontStyleEl.remove();
     const navBtn = document.getElementById('agy-custom-theme-sidebar-btn');
@@ -3112,8 +1893,10 @@
     if (shell) {
       shell.classList.remove('agy-revealing');
       delete shell.dataset.agyHoleActive;
-      shell.style.removeProperty('--agy-hole-clip');
-      shell.style.removeProperty('--agy-l-glass-bg');
+      delete shell.dataset.agySideGlass;
+      ['--agy-hole-clip', '--agy-l-glass-bg', '--agy-sidebar-w', '--agy-hdr-h', '--agy-side-l', '--agy-side-t', '--agy-side-r', '--agy-side-b'].forEach((p) => {
+        shell.style.removeProperty(p);
+      });
     }
     if (window.electronNative && typeof window.electronNative.setTitleBarOverlay === 'function') {
       try {
@@ -3137,1193 +1920,9 @@
   }
 
   function openCustomThemeModal() {
-    let backdrop = document.getElementById('agy-custom-theme-modal-backdrop');
-    if (!backdrop) {
-      backdrop = document.createElement('div');
-      backdrop.id = 'agy-custom-theme-modal-backdrop';
-      backdrop.style.cssText = `
-        position: fixed;
-        inset: 0;
-        z-index: 99999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 32px;
-        background: rgba(0, 0, 0, 0.72);
-      `;
-
-      backdrop.innerHTML = `
-        <div id="agy-custom-theme-modal-dialog" style="background: rgba(16, 12, 11, 0.97); border: 1.2px solid rgba(212, 148, 106, 0.35); border-radius: 18px; width: 100%; max-width: 900px; height: 86vh; max-height: 860px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 24px 64px rgba(0, 0, 0, 0.9), 0 0 32px rgba(224, 142, 85, 0.25); font-family: system-ui, -apple-system, sans-serif;">
-          <div id="agy-custom-theme-modal-header" style="display: flex; justify-content: space-between; align-items: center; padding: 18px 26px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(22, 16, 14, 0.85);">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-size: 17px; font-weight: 600; color: #f4f4f5; letter-spacing: -0.2px;">Custom Theme Studio</span>
-              <span id="agy-custom-theme-badge" style="font-size: 11.5px; padding: 2.5px 9px; border-radius: 9999px; background: rgba(224, 142, 85, 0.2); color: #e08e55; font-weight: 500; border: 1px solid rgba(224, 142, 85, 0.3);">${THEME_KEYS.length} Preset${THEME_KEYS.length > 1 ? 's' : ''}</span>
-            </div>
-            <button id="agy-theme-modal-close-btn" type="button" style="background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); color: #d4d4d8; cursor: pointer; width: 30px; height: 30px; border-radius: 8px; font-size: 15px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">✕</button>
-          </div>
-          <div id="agy-theme-modal-body" style="flex: 1; overflow-y: auto; height: 100%;"></div>
-        </div>
-      `;
-
-      document.body.appendChild(backdrop);
-
-      backdrop.addEventListener('click', (e) => {
-        if (e.target === backdrop) backdrop.style.display = 'none';
-      });
-      backdrop.querySelector('#agy-theme-modal-close-btn').addEventListener('click', () => {
-        backdrop.style.display = 'none';
-      });
-      if (window.__AGY_MODAL_AC__) {
-        try { window.__AGY_MODAL_AC__.abort(); } catch (e) {}
-      }
-      window.__AGY_MODAL_AC__ = new AbortController();
-      window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && backdrop.style.display !== 'none') {
-          backdrop.style.display = 'none';
-        }
-      }, { signal: window.__AGY_MODAL_AC__.signal });
-    }
-
-    backdrop.style.display = 'flex';
-    const body = backdrop.querySelector('#agy-theme-modal-body');
-    renderThemePanels(body);
-  }
-
-  function renderThemePanels(container) {
-    const st = getState();
-    const mainTheme = THEMES[st.themeName] || THEMES[DEFAULT_THEME_KEY];
-    const effUserAv = st.userAvatar === 'none' ? '' : (st.userAvatar || mainTheme.userAvatar || '');
-    const effAgentAv = st.agentAvatar === 'none' ? '' : (st.agentAvatar || mainTheme.agentAvatar || '');
-
-    container.innerHTML = `
-      <div id="agy-theme-scroll-container" style="padding: 24px 32px 48px 32px; max-width: 860px; margin: 0 auto; overflow-y: auto; height: 100%; color: #f4f4f5;">
-        <div style="border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'}; border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-            <div>
-              <div style="font-size: 14.5px; font-weight: 600; color: #f4f4f5; margin-bottom: 2px;">Wallpaper, Pre-Baked Blur & Config</div>
-              <div style="font-size: 12.5px; color: #a1a1aa;">Balance artwork clarity, 120fps pre-baked frosted glass blur, or share config JSON.</div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-wp-toggle" type="checkbox" ${st.wpEnabled ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Backdrop
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a1a1aa;">
-                Dim
-                <input id="agy-dim-slider" type="range" min="15" max="92" value="${st.dimming}" style="width: 96px; cursor: pointer; accent-color: #ffffff; height: 5px;" />
-                <span id="agy-dim-val" style="min-width: 32px; text-align: right;">${st.dimming}%</span>
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a1a1aa;">
-                Blur
-                <input id="agy-blur-slider" type="range" min="0" max="16" value="${st.glassBlur}" style="width: 78px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 5px;" />
-                <span id="agy-blur-val" style="min-width: 30px; text-align: right;">${st.glassBlur}px</span>
-              </label>
-              <div style="display: inline-flex; border-radius: 8px; overflow: hidden; border: 1px solid ${mainTheme.borderColor}; background: rgba(0,0,0,0.28);">
-                <button id="agy-mode-image" type="button" style="padding: 4px 10px; font-size: 11.5px; cursor: pointer; border: none; background: ${st.wpMode === 'image' ? 'rgba(255,255,255,0.18)' : 'transparent'}; color: ${st.wpMode === 'image' ? '#ffffff' : '#a1a1aa'}; font-weight: ${st.wpMode === 'image' ? '600' : '400'};">Ảnh tĩnh</button>
-                <button id="agy-mode-video" type="button" style="padding: 4px 10px; font-size: 11.5px; cursor: pointer; border: none; border-left: 1px solid ${mainTheme.borderColor}; background: ${st.wpMode === 'video' ? 'rgba(255,255,255,0.18)' : 'transparent'}; color: ${st.wpMode === 'video' ? '#ffffff' : '#a1a1aa'}; font-weight: ${st.wpMode === 'video' ? '600' : '400'};">Video động</button>
-              </div>
-              <label style="padding: 5px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid ${mainTheme.borderColor}; color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                Chọn Ảnh / Video
-                <input id="agy-wp-upload" type="file" accept="image/*,video/mp4,video/webm,video/quicktime,video/*" style="display: none;" />
-              </label>
-              <button id="agy-export-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16); color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                Export JSON
-              </button>
-              <button id="agy-import-toggle" type="button" style="padding: 5px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.16); color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                Import JSON
-              </button>
-              <button id="agy-reset-btn" type="button" style="padding: 5px 10px; border-radius: 8px; background: rgba(239, 68, 68, 0.14); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                Reset
-              </button>
-            </div>
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.07);">
-            <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-boot-toggle" type="checkbox" ${st.bootIntro ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Boot Intro + Tawa Voice
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-sketch-toggle" type="checkbox" ${st.sketchReveal ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Vẽ nét → Loang màu
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-greeting-toggle" type="checkbox" ${st.tawaGreeting ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Câu chào Custom
-              </label>
-              <label style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #d4d4d8; cursor: pointer;">
-                <input id="agy-task-voice-toggle" type="checkbox" ${st.taskVoiceEnabled ? 'checked' : ''} style="accent-color: ${mainTheme.primary}; cursor: pointer;" />
-                Voice xong Task
-              </label>
-              <span id="agy-upload-status" style="font-size: 11.5px; color: #93c5fd;"></span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-              <button id="agy-custom-vg-toggle" type="button" style="padding: 4px 10px; border-radius: 7px; background: rgba(255,255,255,0.08); border: 1px solid ${mainTheme.borderColor}; color: #e4e4e7; font-size: 11.5px; cursor: pointer;">
-                Tùy chỉnh Voice &amp; Câu chào ▾
-              </button>
-              <button id="agy-replay-boot-btn" type="button" style="padding: 4px 10px; border-radius: 7px; background: rgba(255,255,255,0.08); border: 1px solid ${mainTheme.borderColor}; color: #e4e4e7; font-size: 11.5px; cursor: pointer;">
-                Replay Intro
-              </button>
-              <button id="agy-replay-reveal-btn" type="button" style="padding: 4px 10px; border-radius: 7px; background: rgba(255,255,255,0.08); border: 1px solid ${mainTheme.borderColor}; color: #e4e4e7; font-size: 11.5px; cursor: pointer;">
-                Replay Vẽ Nền
-              </button>
-            </div>
-          </div>
-          <div id="agy-custom-vg-box" style="display: none; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08);">
-            <div style="display: flex; flex-direction: column; gap: 8px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-                <span style="font-size: 12.5px; font-weight: 600; color: #f4f4f5;">Voice báo xong Task (Random)</span>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                  <button id="agy-task-voice-test" type="button" title="Nghe thử ngẫu nhiên" style="padding: 4px 8px; border-radius: 7px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); color: #e4e4e7; font-size: 11.5px; cursor: pointer;">🎲 Test</button>
-                  <label style="padding: 4px 9px; border-radius: 7px; background: rgba(255, 255, 255, 0.08); border: 1px solid ${mainTheme.borderColor}; color: #f4f4f5; font-size: 11.5px; cursor: pointer; white-space: nowrap;">
-                    Thêm Voice
-                    <input id="agy-task-voice-upload" type="file" multiple accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac" style="display: none;" />
-                  </label>
-                </div>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 11.5px; color: #a1a1aa;">Âm lượng</span>
-                <input id="agy-task-voice-vol" type="range" min="0" max="100" value="${st.taskVoiceVol}" style="flex: 1; cursor: pointer; accent-color: ${mainTheme.primary}; height: 5px;" />
-                <span id="agy-task-voice-vol-val" style="min-width: 34px; text-align: right; font-size: 11.5px; color: #d4d4d8;">${st.taskVoiceVol}%</span>
-              </div>
-              <div id="agy-task-voice-list" style="display: flex; flex-direction: column; gap: 5px; max-height: 112px; overflow-y: auto;"></div>
-              <div style="font-size: 11px; color: #71717a;">Chỉ tạo Audio khi tác vụ vừa xong rồi tự hủy (0 MB RAM khi rảnh).</div>
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 8px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px;">
-              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
-                <span style="font-size: 12.5px; font-weight: 600; color: #f4f4f5;">Câu chào Custom (mỗi dòng 1 câu)</span>
-                <span id="agy-greeting-msg" style="font-size: 11px; color: #93c5fd;"></span>
-              </div>
-              <textarea id="agy-greeting-lines" rows="4" placeholder="Nhập câu chào riêng của bạn (mỗi dòng 1 câu)..." style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.38); color: #f4f4f5; border: 1px solid ${mainTheme.borderColor}; border-radius: 7px; padding: 7px 9px; font-size: 12px; resize: vertical; line-height: 1.45;">${escapeHtml((st.customGreetings || []).join('\n'))}</textarea>
-              <div style="display: flex; justify-content: flex-end; gap: 8px;">
-                <button id="agy-greeting-reset" type="button" style="padding: 4px 10px; border-radius: 7px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #d4d4d8; font-size: 11.5px; cursor: pointer;">Xóa hết</button>
-                <button id="agy-greeting-save" type="button" style="padding: 4px 12px; border-radius: 7px; background: ${mainTheme.primary}; color: #090d16; font-weight: 600; font-size: 11.5px; border: none; cursor: pointer;">Lưu câu chào</button>
-              </div>
-            </div>
-          </div>
-          <div id="agy-import-box" style="display: none; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08);">
-            <textarea id="agy-import-text" rows="3" placeholder='Paste exported theme config JSON here (e.g. {"themeName":"WLOP Cosmic","dimming":45,...})' style="width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.35); color: #f4f4f5; border: 1px solid ${mainTheme.borderColor}; border-radius: 8px; padding: 8px 10px; font-family: monospace; font-size: 12px; resize: vertical;"></textarea>
-            <div style="display: flex; justify-content: flex-end; align-items: center; gap: 8px;">
-              <span id="agy-import-msg" style="font-size: 12px; color: #fca5a5;"></span>
-              <button id="agy-import-apply" type="button" style="padding: 5px 12px; border-radius: 7px; background: ${mainTheme.primary}; color: #090d16; font-weight: 600; font-size: 12px; border: none; cursor: pointer;">Apply JSON</button>
-            </div>
-          </div>
-        </div>
-
-        <div style="border: 1px solid ${mainTheme.borderColor}; background: ${mainTheme.cardBg || 'rgba(22, 16, 14, 0.72)'}; border-radius: 12px; padding: 14px 20px; margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
-            <div>
-              <div style="font-size: 14px; font-weight: 600; color: #f4f4f5; margin-bottom: 2px;">Chat Avatars (User & AI Agent)</div>
-              <div style="font-size: 12px; color: #a1a1aa;">Profile badges rendered beside chat messages (auto-compressed WebP).</div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <div id="agy-user-av-preview" style="width: 30px; height: 30px; border-radius: ${st.avatarRadius}%; border: 1.5px solid ${mainTheme.primary}; background: rgba(255,255,255,0.06) ${effUserAv ? `url('${effUserAv}') center/cover no-repeat` : ''}; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #a1a1aa;">${effUserAv ? '' : 'U'}</div>
-                <label style="padding: 4px 10px; border-radius: 7px; background: rgba(255, 255, 255, 0.08); border: 1px solid ${mainTheme.borderColor}; color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                  User
-                  <input id="agy-user-av-upload" type="file" accept="image/*" style="display: none;" />
-                </label>
-                <button id="agy-user-av-clear" type="button" style="padding: 4px 8px; border-radius: 7px; background: transparent; border: 1px solid rgba(255, 255, 255, 0.14); color: #a1a1aa; font-size: 11.5px; cursor: pointer;">Off</button>
-              </div>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <div id="agy-agent-av-preview" style="width: 30px; height: 30px; border-radius: ${st.avatarRadius}%; border: 1.5px solid ${mainTheme.secondary || mainTheme.primary}; background: rgba(255,255,255,0.06) ${effAgentAv ? `url('${effAgentAv}') center/cover no-repeat` : ''}; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #a1a1aa;">${effAgentAv ? '' : 'AI'}</div>
-                <label style="padding: 4px 10px; border-radius: 7px; background: rgba(255, 255, 255, 0.08); border: 1px solid ${mainTheme.borderColor}; color: #f4f4f5; font-size: 12px; cursor: pointer; white-space: nowrap;">
-                  Agent
-                  <input id="agy-agent-av-upload" type="file" accept="image/*" style="display: none;" />
-                </label>
-                <button id="agy-agent-av-clear" type="button" style="padding: 4px 8px; border-radius: 7px; background: transparent; border: 1px solid rgba(255, 255, 255, 0.14); color: #a1a1aa; font-size: 11.5px; cursor: pointer;">Off</button>
-              </div>
-            </div>
-          </div>
-          <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.07);">
-            <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a1a1aa;">
-              Size
-              <input id="agy-av-size" type="range" min="22" max="52" value="${st.avatarSize}" style="width: 100px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 5px;" />
-              <span id="agy-av-size-val" style="min-width: 34px;">${st.avatarSize}px</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #a1a1aa;">
-              Corner Radius
-              <input id="agy-av-rad" type="range" min="0" max="50" value="${st.avatarRadius}" style="width: 100px; cursor: pointer; accent-color: ${mainTheme.primary}; height: 5px;" />
-              <span id="agy-av-rad-val" style="min-width: 34px;">${st.avatarRadius}%</span>
-            </label>
-          </div>
-        </div>
-
-        <div style="margin-bottom: 28px;">
-          <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">User Chat Bubble</div>
-          <div style="font-size: 12.5px; color: #a1a1aa; margin-bottom: 14px;">Mix and match bubble frame & ornament independently from the active wallpaper.</div>
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-            ${THEME_KEYS.map(name => {
-              const th = THEMES[name];
-              const isSelected = name === st.bubbleName;
-              const stickerTop = th.isOrnament ? Math.round((th.stickerTop || 0) * 0.85) : Math.round((th.stickerTop || 0) * 0.74);
-              const stickerW = Math.round((th.stickerW || 0) * 0.78);
-              const stickerH = th.isOrnament ? Math.round((th.stickerH || 0) * 0.8) : Math.round((th.stickerH || 0) * 0.78);
-              return `
-                <div class="agy-bubble-card" data-name="${name}" style="position: relative; border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: ${isSelected ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)'}; padding: 24px 18px 14px 18px; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; min-height: 112px; transition: border-color 0.15s ease, background-color 0.15s ease;">
-                  <div style="display: flex; justify-content: center; align-items: center; width: 100%; margin-top: 6px; margin-bottom: 10px;">
-                    <div style="position: relative; width: 192px; height: 46px; padding: 1.2px; border-radius: ${th.isScroll ? '6px' : '12px'}; background: ${th.frameBg}; box-shadow: 0 4px 14px rgba(0,0,0,0.45), 0 0 10px ${th.glow};">
-                      <div style="position: relative; width: 100%; height: 100%; background: ${th.bg}; border: ${th.innerBorder || '1px solid ' + th.borderColor}; border-radius: ${th.isScroll ? '4px' : '11px'}; display: flex; align-items: center; padding: 0 16px;">
-                        ${th.sticker ? `<div style="position: absolute; top: ${stickerTop}px; right: 8px; width: ${stickerW}px; height: ${stickerH}px; background-image: url('${th.sticker}'); background-size: contain; background-position: ${th.isOrnament ? 'center' : 'bottom center'}; background-repeat: no-repeat; pointer-events: none;"></div>` : ''}
-                        <span style="font-size: 13.5px; font-weight: 500; color: ${th.textColor};">Hello ✨</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 13.5px; font-weight: 500; color: #e4e4e7;">${name}</span>
-                    <div class="agy-card-check-slot">${isSelected ? CHECK_SVG : ''}</div>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-
-        <div style="margin-bottom: 28px;">
-          <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Composer Style</div>
-          <div style="font-size: 12.5px; color: #a1a1aa; margin-bottom: 14px;">Customize the chat input frame without affecting keyboard shortcuts or attachments.</div>
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-            ${Object.entries(INPUT_STYLES).map(([key, item]) => {
-              const isSelected = key === st.inputStyle;
-              const activeBubbleTh = THEMES[st.bubbleName] || mainTheme;
-              const previewStickerStyle = activeBubbleTh.isOrnament
-                ? 'top: -12px; right: 10px; width: 72px; height: 22px; background-position: center;'
-                : 'top: -22px; right: 10px; width: 32px; height: 28px; background-position: bottom center;';
-              const previewInnerBg = key === 'glass'
-                ? (activeBubbleTh.inputGlassBg || 'rgba(20, 15, 13, 0.45)')
-                : (activeBubbleTh.inputCardBg || 'rgba(26, 18, 15, 0.92)');
-              return `
-                <div class="agy-input-card" data-style="${key}" style="border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: ${isSelected ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)'}; padding: 16px 18px; cursor: pointer; display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s ease, background-color 0.15s ease;">
-                  <div class="agy-input-preview-outer" style="position: relative; margin-top: 8px; padding: 1.5px; border-radius: 10px; background: ${key === 'double_gold' ? 'linear-gradient(135deg, #f59e0b, #fbbf24)' : activeBubbleTh.frameBg};">
-                    <div class="agy-input-preview-sticker" style="position: absolute; ${previewStickerStyle} background-image: url('${activeBubbleTh.sticker || ''}'); background-size: contain; background-repeat: no-repeat; display: ${key !== 'minimal' && activeBubbleTh.sticker ? 'block' : 'none'}; pointer-events: none;"></div>
-                    <div class="agy-input-preview-inner" style="background: ${previewInnerBg}; border-radius: 9px; padding: 8px 12px; font-size: 12px; color: #a1a1aa; display: flex; justify-content: space-between; align-items: center;">
-                      <span>Ask anything, @ to mention...</span>
-                      <span class="agy-input-preview-turbo" style="color: ${activeBubbleTh.primary}; font-size: 11px;">Send →</span>
-                    </div>
-                  </div>
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                      <div style="font-size: 13.5px; font-weight: 500; color: #e4e4e7;">${item.label}</div>
-                      <div style="font-size: 11.5px; color: #a1a1aa;">${item.desc}</div>
-                    </div>
-                    <div class="agy-card-check-slot">${isSelected ? CHECK_SVG : ''}</div>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        </div>
-
-        <div id="agy-presets-section"></div>
-      </div>
-    `;
-
-    function updateInputPreviews(bName) {
-      const activeTh = THEMES[bName] || THEMES[DEFAULT_THEME_KEY];
-      container.querySelectorAll('.agy-input-card').forEach(card => {
-        const key = card.dataset.style;
-        const outer = card.querySelector('.agy-input-preview-outer');
-        if (outer) {
-          outer.style.background = key === 'double_gold'
-            ? 'linear-gradient(135deg, #f59e0b, #fbbf24)'
-            : activeTh.frameBg;
-        }
-        const inner = card.querySelector('.agy-input-preview-inner');
-        if (inner) {
-          inner.style.background = key === 'glass'
-            ? (activeTh.inputGlassBg || 'rgba(20, 15, 13, 0.45)')
-            : (activeTh.inputCardBg || 'rgba(26, 18, 15, 0.92)');
-        }
-        const sticker = card.querySelector('.agy-input-preview-sticker');
-        if (sticker) {
-          if (key !== 'minimal' && activeTh.sticker) {
-            sticker.style.display = 'block';
-            sticker.style.backgroundImage = `url('${activeTh.sticker}')`;
-            if (activeTh.isOrnament) {
-              sticker.style.top = '-12px';
-              sticker.style.width = '72px';
-              sticker.style.height = '22px';
-              sticker.style.backgroundPosition = 'center';
-            } else {
-              sticker.style.top = '-22px';
-              sticker.style.width = '32px';
-              sticker.style.height = '28px';
-              sticker.style.backgroundPosition = 'bottom center';
-            }
-          } else {
-            sticker.style.display = 'none';
-          }
-        }
-        const turbo = card.querySelector('.agy-input-preview-turbo');
-        if (turbo) {
-          turbo.style.color = activeTh.primary;
-        }
-      });
-    }
-
-    const slider = container.querySelector('#agy-dim-slider');
-    const valLabel = container.querySelector('#agy-dim-val');
-    slider.addEventListener('input', (e) => {
-      const v = parseInt(e.target.value, 10);
-      valLabel.textContent = v + '%';
-      applyTheme({ dimming: v }, { debounceSave: true });
-    });
-
-    const wpToggle = container.querySelector('#agy-wp-toggle');
-    wpToggle.addEventListener('change', (e) => {
-      applyTheme({ wpEnabled: e.target.checked });
-    });
-
-    const modeImgBtn = container.querySelector('#agy-mode-image');
-    const modeVidBtn = container.querySelector('#agy-mode-video');
-    const uploadStatus = container.querySelector('#agy-upload-status');
-    function syncModeButtons(activeMode) {
-      if (modeImgBtn) {
-        modeImgBtn.style.background = activeMode === 'image' ? 'rgba(255,255,255,0.18)' : 'transparent';
-        modeImgBtn.style.color = activeMode === 'image' ? '#ffffff' : '#a1a1aa';
-        modeImgBtn.style.fontWeight = activeMode === 'image' ? '600' : '400';
-      }
-      if (modeVidBtn) {
-        modeVidBtn.style.background = activeMode === 'video' ? 'rgba(255,255,255,0.18)' : 'transparent';
-        modeVidBtn.style.color = activeMode === 'video' ? '#ffffff' : '#a1a1aa';
-        modeVidBtn.style.fontWeight = activeMode === 'video' ? '600' : '400';
-      }
-    }
-    if (modeImgBtn) {
-      modeImgBtn.addEventListener('click', () => {
-        applyTheme({ wpMode: 'image', wpEnabled: true });
-        syncModeButtons('image');
-        if (wpToggle) wpToggle.checked = true;
-        if (uploadStatus) uploadStatus.textContent = '';
-        renderPresetsSection();
-      });
-    }
-    if (modeVidBtn) {
-      modeVidBtn.addEventListener('click', () => {
-        const curSt = getState();
-        const curTh = THEMES[curSt.themeName] || {};
-        const hasVid = Boolean(curSt.customVideo || curTh.wallpaperVideo);
-        applyTheme({ wpMode: 'video', wpEnabled: true });
-        syncModeButtons('video');
-        if (wpToggle) wpToggle.checked = true;
-        if (uploadStatus) {
-          uploadStatus.textContent = hasVid ? '' : 'Hãy chọn Furina Live hoặc một Video đã lưu bên dưới';
-        }
-        renderPresetsSection();
-      });
-    }
-
-    const bootToggle = container.querySelector('#agy-boot-toggle');
-    if (bootToggle) {
-      bootToggle.addEventListener('change', (e) => {
-        applyTheme({ bootIntro: e.target.checked });
-      });
-    }
-    const sketchToggle = container.querySelector('#agy-sketch-toggle');
-    if (sketchToggle) {
-      sketchToggle.addEventListener('change', (e) => {
-        applyTheme({ sketchReveal: e.target.checked });
-      });
-    }
-    const greetingToggle = container.querySelector('#agy-greeting-toggle');
-    if (greetingToggle) {
-      greetingToggle.addEventListener('change', (e) => {
-        applyTheme({ tawaGreeting: e.target.checked });
-      });
-    }
-    function closeHostModalsForPreview() {
-      const bd = document.getElementById('agy-custom-theme-modal-backdrop');
-      if (bd) bd.style.display = 'none';
-      const settingsBox = document.querySelector('.settings-modal-container');
-      if (settingsBox) {
-        const sr = settingsBox.getBoundingClientRect();
-        const closeBtn = Array.from(settingsBox.querySelectorAll('button')).find((b) => {
-          const r = b.getBoundingClientRect();
-          return r.width > 0 && r.height > 0 && (r.top - sr.top) < 64 && (sr.right - r.right) < 64;
-        });
-        if (closeBtn) {
-          closeBtn.click();
-        } else {
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true }));
-        }
-      }
-    }
-    const replayBootBtn = container.querySelector('#agy-replay-boot-btn');
-    if (replayBootBtn) {
-      replayBootBtn.addEventListener('click', () => {
-        closeHostModalsForPreview();
-        mountBootSequence(true);
-      });
-    }
-    const replayRevealBtn = container.querySelector('#agy-replay-reveal-btn');
-    if (replayRevealBtn) {
-      replayRevealBtn.addEventListener('click', () => {
-        closeHostModalsForPreview();
-        setTimeout(() => triggerSketchBloomReveal(false), 120);
-      });
-    }
-
-    function compressWallpaperImageFile(file, maxDim = 2560) {
-      if (!file || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
-        return Promise.resolve(file);
-      }
-      const lowerName = String(file.name || '').toLowerCase();
-      const lowerType = String(file.type || '').toLowerCase();
-      if (lowerType === 'image/gif' || lowerType === 'image/svg+xml' || /\.(gif|svg)$/i.test(lowerName)) {
-        return Promise.resolve(file);
-      }
-      return new Promise((resolve) => {
-        const objUrl = URL.createObjectURL(file);
-        const img = new Image();
-        const cleanup = () => { try { URL.revokeObjectURL(objUrl); } catch (e) {} };
-        img.onload = () => {
-          try {
-            const natW = img.naturalWidth || 0;
-            const natH = img.naturalHeight || 0;
-            const longest = Math.max(natW, natH);
-            if (!longest || (longest <= maxDim && file.size <= 1.5 * 1024 * 1024)) {
-              cleanup();
-              resolve(file);
-              return;
-            }
-            const scale = longest > maxDim ? (maxDim / longest) : 1;
-            const targetW = Math.max(1, Math.round(natW * scale));
-            const targetH = Math.max(1, Math.round(natH * scale));
-            const canvas = document.createElement('canvas');
-            canvas.width = targetW;
-            canvas.height = targetH;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) {
-              cleanup();
-              resolve(file);
-              return;
-            }
-            ctx.drawImage(img, 0, 0, targetW, targetH);
-            cleanup();
-            if (typeof canvas.toBlob === 'function') {
-              canvas.toBlob((blob) => {
-                canvas.width = 0;
-                canvas.height = 0;
-                if (blob && blob.size > 0 && (longest > maxDim || blob.size < file.size)) {
-                  const base = String(file.name || 'wallpaper').replace(/\.[^.]+$/, '');
-                  resolve(new File([blob], `${base}.webp`, { type: 'image/webp' }));
-                } else {
-                  resolve(file);
-                }
-              }, 'image/webp', 0.88);
-            } else {
-              canvas.width = 0;
-              canvas.height = 0;
-              resolve(file);
-            }
-          } catch (e) {
-            cleanup();
-            resolve(file);
-          }
-        };
-        img.onerror = () => {
-          cleanup();
-          resolve(file);
-        };
-        img.src = objUrl;
-      });
-    }
-
-    async function uploadMediaToServer(file, fallbackName) {
-      const base = window.__AGY_MEDIA_BASE_URL__ ? String(window.__AGY_MEDIA_BASE_URL__).replace(/\/+$/, '') : '';
-      if (!base) return null;
-      try {
-        const resp = await fetch(`${base}/upload?name=${encodeURIComponent(file.name || fallbackName)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file
-        });
-        if (resp.ok) {
-          const info = await resp.json();
-          if (info && info.url) return info;
-        }
-      } catch (err) {}
-      return null;
-    }
-
-    function triggerRevealOnReady(kind) {
-      if (!getState().sketchReveal) return;
-      if (kind === 'video') {
-        const vidEl = document.getElementById('agy-live-bg-video');
-        if (vidEl) {
-          const onReady = () => triggerSketchBloomReveal(false);
-          if (vidEl.readyState >= 2) onReady();
-          else vidEl.addEventListener('loadeddata', onReady, { once: true });
-        }
-      } else {
-        const imgEl = document.getElementById('agy-live-bg-img');
-        if (imgEl) {
-          const onReady = () => triggerSketchBloomReveal(false);
-          if (imgEl.complete) onReady();
-          else imgEl.addEventListener('load', onReady, { once: true });
-        }
-      }
-    }
-
-    const wpUpload = container.querySelector('#agy-wp-upload');
-    wpUpload.addEventListener('change', async (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      const isVideo = (file.type && file.type.startsWith('video/')) || /\.(mp4|webm|mov|m4v)$/i.test(file.name || '');
-      const kind = isVideo ? 'video' : 'image';
-      if (uploadStatus) uploadStatus.textContent = isVideo ? 'Đang nạp video...' : 'Đang tối ưu & nạp ảnh nền...';
-
-      const preparedFile = isVideo ? file : await compressWallpaperImageFile(file, 2560);
-      const uploaded = await uploadMediaToServer(preparedFile, isVideo ? 'custom.mp4' : 'custom.webp');
-      let mediaUrl = uploaded && uploaded.url ? uploaded.url : '';
-      const displayName = (uploaded && uploaded.name) || preparedFile.name || (isVideo ? 'Custom Video' : 'Custom Image');
-
-      if (!mediaUrl) {
-        if (isVideo) {
-          mediaUrl = URL.createObjectURL(preparedFile);
-        } else {
-          mediaUrl = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result || ''));
-            reader.onerror = () => resolve('');
-            reader.readAsDataURL(preparedFile);
-          });
-        }
-      }
-
-      wpUpload.value = '';
-      if (!mediaUrl) {
-        if (uploadStatus) uploadStatus.textContent = 'Không đọc được tệp đã chọn!';
-        return;
-      }
-
-      const nextList = upsertSavedMedia(kind, {
-        url: mediaUrl,
-        name: displayName,
-        addedAt: Date.now()
-      });
-
-      if (isVideo) {
-        applyTheme({ wpMode: 'video', customVideo: mediaUrl, savedVideos: nextList, wpEnabled: true });
-        syncModeButtons('video');
-        if (uploadStatus) uploadStatus.textContent = uploaded && uploaded.duplicate ? 'Đã chọn lại video đã lưu!' : 'Đã lưu & cập nhật video nền!';
-      } else {
-        applyTheme({ wpMode: 'image', customWp: mediaUrl, savedImages: nextList, wpEnabled: true });
-        syncModeButtons('image');
-        if (uploadStatus) uploadStatus.textContent = uploaded && uploaded.duplicate ? 'Đã chọn lại ảnh đã lưu!' : 'Đã lưu & cập nhật ảnh nền!';
-      }
-      if (wpToggle) wpToggle.checked = true;
-      renderPresetsSection();
-      triggerRevealOnReady(kind);
-    });
-
-    const userAvUpload = container.querySelector('#agy-user-av-upload');
-    const userAvPreview = container.querySelector('#agy-user-av-preview');
-    const userAvClear = container.querySelector('#agy-user-av-clear');
-    const agentAvUpload = container.querySelector('#agy-agent-av-upload');
-    const agentAvPreview = container.querySelector('#agy-agent-av-preview');
-    const agentAvClear = container.querySelector('#agy-agent-av-clear');
-
-    function syncAvPreview(el, url, fallbackText) {
-      if (!el) return;
-      if (url) {
-        el.style.backgroundImage = `url("${url}")`;
-        el.style.backgroundSize = 'cover';
-        el.style.backgroundPosition = 'center';
-        el.textContent = '';
-      } else {
-        el.style.backgroundImage = 'none';
-        el.textContent = fallbackText;
-      }
-    }
-
-    if (userAvUpload) {
-      userAvUpload.addEventListener('change', (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-        compressAvatarFile(file, (dataUrl) => {
-          applyTheme({ userAvatar: dataUrl });
-          syncAvPreview(userAvPreview, dataUrl, 'U');
-        });
-      });
-    }
-    if (userAvClear) {
-      userAvClear.addEventListener('click', () => {
-        applyTheme({ userAvatar: 'none' });
-        syncAvPreview(userAvPreview, '', 'U');
-      });
-    }
-    if (agentAvUpload) {
-      agentAvUpload.addEventListener('change', (e) => {
-        const file = e.target.files && e.target.files[0];
-        if (!file) return;
-        compressAvatarFile(file, (dataUrl) => {
-          applyTheme({ agentAvatar: dataUrl });
-          syncAvPreview(agentAvPreview, dataUrl, 'AI');
-        });
-      });
-    }
-    if (agentAvClear) {
-      agentAvClear.addEventListener('click', () => {
-        applyTheme({ agentAvatar: 'none' });
-        syncAvPreview(agentAvPreview, '', 'AI');
-      });
-    }
-
-    const blurSlider = container.querySelector('#agy-blur-slider');
-    const blurLabel = container.querySelector('#agy-blur-val');
-    if (blurSlider) {
-      blurSlider.addEventListener('input', (e) => {
-        const v = parseInt(e.target.value, 10);
-        if (blurLabel) blurLabel.textContent = v + 'px';
-        applyTheme({ glassBlur: v }, { debounceSave: true });
-      });
-    }
-
-    const avSizeSlider = container.querySelector('#agy-av-size');
-    const avSizeVal = container.querySelector('#agy-av-size-val');
-    if (avSizeSlider) {
-      avSizeSlider.addEventListener('input', (e) => {
-        const v = parseInt(e.target.value, 10);
-        if (avSizeVal) avSizeVal.textContent = v + 'px';
-        applyTheme({ avatarSize: v }, { debounceSave: true });
-      });
-    }
-
-    const avRadSlider = container.querySelector('#agy-av-rad');
-    const avRadVal = container.querySelector('#agy-av-rad-val');
-    if (avRadSlider) {
-      avRadSlider.addEventListener('input', (e) => {
-        const v = parseInt(e.target.value, 10);
-        if (avRadVal) avRadVal.textContent = v + '%';
-        if (userAvPreview) userAvPreview.style.borderRadius = v + '%';
-        if (agentAvPreview) agentAvPreview.style.borderRadius = v + '%';
-        applyTheme({ avatarRadius: v }, { debounceSave: true });
-      });
-    }
-
-    const exportBtn = container.querySelector('#agy-export-btn');
-    const importToggle = container.querySelector('#agy-import-toggle');
-    const importBox = container.querySelector('#agy-import-box');
-    const importText = container.querySelector('#agy-import-text');
-    const importApply = container.querySelector('#agy-import-apply');
-    const importMsg = container.querySelector('#agy-import-msg');
-
-    if (exportBtn) {
-      exportBtn.addEventListener('click', () => {
-        const json = JSON.stringify(getState(), null, 2);
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-          navigator.clipboard.writeText(json).then(() => {
-            exportBtn.textContent = 'Copied ✓';
-            setTimeout(() => { exportBtn.textContent = 'Export JSON'; }, 1500);
-          }).catch(() => {
-            if (importBox && importText) {
-              importBox.style.display = 'flex';
-              importText.value = json;
-              importText.select();
-            }
-          });
-        } else if (importBox && importText) {
-          importBox.style.display = 'flex';
-          importText.value = json;
-          importText.select();
-        }
-      });
-    }
-    if (importToggle && importBox) {
-      importToggle.addEventListener('click', () => {
-        importBox.style.display = importBox.style.display === 'none' ? 'flex' : 'none';
-        if (importMsg) importMsg.textContent = '';
-      });
-    }
-    if (importApply && importText) {
-      importApply.addEventListener('click', () => {
-        try {
-          const parsed = JSON.parse(importText.value.trim());
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw new Error('Config must be a JSON object');
-          }
-          const allowed = {};
-          const keys = ['themeName', 'bubbleName', 'inputStyle', 'dimming', 'wpEnabled', 'wpMode', 'customWp', 'customVideo', 'savedImages', 'savedVideos', 'taskVoices', 'taskVoiceEnabled', 'taskVoiceVol', 'customGreetings', 'userAvatar', 'agentAvatar', 'glassBlur', 'avatarSize', 'avatarRadius', 'bootIntro', 'sketchReveal', 'tawaGreeting'];
-          keys.forEach((k) => {
-            if (parsed[k] !== undefined) allowed[k] = parsed[k];
-          });
-          applyTheme(allowed);
-          renderThemePanels(container);
-        } catch (err) {
-          if (importMsg) importMsg.textContent = 'Invalid JSON: ' + err.message;
-        }
-      });
-    }
-
-    const resetBtn = container.querySelector('#agy-reset-btn');
-    resetBtn.addEventListener('click', () => {
-      localStorage.removeItem(STORAGE_CUSTOM_WP);
-      localStorage.removeItem(STORAGE_CUSTOM_VIDEO);
-      localStorage.removeItem(STORAGE_WP_MODE);
-      localStorage.removeItem(STORAGE_USER_AVATAR);
-      localStorage.removeItem(STORAGE_AGENT_AVATAR);
-      localStorage.removeItem(STORAGE_GLASS_BLUR);
-      localStorage.removeItem(STORAGE_AVATAR_SIZE);
-      localStorage.removeItem(STORAGE_AVATAR_RADIUS);
-      localStorage.removeItem(STORAGE_THEME);
-      localStorage.removeItem(STORAGE_BUBBLE);
-      localStorage.removeItem(STORAGE_INPUT);
-      localStorage.removeItem(STORAGE_DIMMING);
-      localStorage.removeItem(STORAGE_WP_ENABLED);
-      localStorage.removeItem(STORAGE_BOOT_INTRO);
-      localStorage.removeItem(STORAGE_SKETCH_REVEAL);
-      localStorage.removeItem(STORAGE_TAWA_GREETING);
-      localStorage.removeItem(STORAGE_TASK_VOICE_ENABLED);
-      localStorage.removeItem(STORAGE_TASK_VOICE_VOL);
-      localStorage.removeItem(STORAGE_CUSTOM_GREETINGS);
-      const defTh = THEMES[DEFAULT_THEME_KEY] || {};
-      const defMode = defTh.wallpaperVideo ? 'video' : 'image';
-      applyTheme({
-        themeName: DEFAULT_THEME_KEY,
-        bubbleName: DEFAULT_THEME_KEY,
-        inputStyle: 'sync',
-        dimming: 69,
-        wpEnabled: true,
-        wpMode: defMode,
-        customWp: '',
-        customVideo: '',
-        taskVoiceEnabled: true,
-        taskVoiceVol: 85,
-        customGreetings: [],
-        userAvatar: '',
-        agentAvatar: '',
-        glassBlur: 3,
-        avatarSize: 32,
-        avatarRadius: 50,
-        bootIntro: true,
-        sketchReveal: true,
-        tawaGreeting: true
-      });
-      syncModeButtons(defMode);
-      if (bootToggle) bootToggle.checked = true;
-      if (sketchToggle) sketchToggle.checked = true;
-      if (greetingToggle) greetingToggle.checked = true;
-      if (taskVoiceToggle) taskVoiceToggle.checked = true;
-      if (taskVoiceVolSlider) taskVoiceVolSlider.value = 85;
-      if (taskVoiceVolVal) taskVoiceVolVal.textContent = '85%';
-      if (greetingLinesEl) greetingLinesEl.value = '';
-      renderTaskVoiceList();
-      window.__AGY_GREETING_NEED_FRESH__ = true;
-      syncEmptyGreeting();
-      if (uploadStatus) uploadStatus.textContent = '';
-      syncAvPreview(userAvPreview, defTh.userAvatar || '', 'U');
-      syncAvPreview(agentAvPreview, defTh.agentAvatar || '', 'AI');
-      if (userAvPreview) userAvPreview.style.borderRadius = '50%';
-      if (agentAvPreview) agentAvPreview.style.borderRadius = '50%';
-      if (slider) slider.value = 69;
-      if (valLabel) valLabel.textContent = '69%';
-      if (blurSlider) blurSlider.value = 3;
-      if (blurLabel) blurLabel.textContent = '3px';
-      if (avSizeSlider) avSizeSlider.value = 32;
-      if (avSizeVal) avSizeVal.textContent = '32px';
-      if (avRadSlider) avRadSlider.value = 50;
-      if (avRadVal) avRadVal.textContent = '50%';
-      if (wpToggle) wpToggle.checked = true;
-
-      renderPresetsSection();
-      container.querySelectorAll('.agy-bubble-card').forEach(b => {
-        const isSel = b.dataset.name === DEFAULT_THEME_KEY;
-        b.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
-        b.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
-        const slot = b.querySelector('.agy-card-check-slot');
-        if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
-      });
-      container.querySelectorAll('.agy-input-card').forEach(c => {
-        const isSel = c.dataset.style === 'sync';
-        c.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
-        c.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
-        const slot = c.querySelector('.agy-card-check-slot');
-        if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
-      });
-      updateInputPreviews(DEFAULT_THEME_KEY);
-    });
-
-    const taskVoiceToggle = container.querySelector('#agy-task-voice-toggle');
-    const customVgToggle = container.querySelector('#agy-custom-vg-toggle');
-    const customVgBox = container.querySelector('#agy-custom-vg-box');
-    const taskVoiceUpload = container.querySelector('#agy-task-voice-upload');
-    const taskVoiceTestBtn = container.querySelector('#agy-task-voice-test');
-    const taskVoiceVolSlider = container.querySelector('#agy-task-voice-vol');
-    const taskVoiceVolVal = container.querySelector('#agy-task-voice-vol-val');
-    const taskVoiceListEl = container.querySelector('#agy-task-voice-list');
-    const greetingLinesEl = container.querySelector('#agy-greeting-lines');
-    const greetingSaveBtn = container.querySelector('#agy-greeting-save');
-    const greetingResetBtn = container.querySelector('#agy-greeting-reset');
-    const greetingMsgEl = container.querySelector('#agy-greeting-msg');
-
-    function renderTaskVoiceList() {
-      if (!taskVoiceListEl) return;
-      const voices = getMediaLibrary('audio');
-      if (voices.length === 0) {
-        taskVoiceListEl.innerHTML = `<div style="font-size: 11.5px; color: #71717a; padding: 6px 2px;">Chưa có file voice nào. Bấm "Thêm Voice" để nạp 1 hoặc nhiều file .mp3/.wav/.ogg/.m4a.</div>`;
-        return;
-      }
-      taskVoiceListEl.innerHTML = voices.map((v, idx) => `
-        <div style="display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.10); background: rgba(255,255,255,0.03);">
-          <span style="font-size: 10.5px; color: #93c5fd; min-width: 16px;">#${idx + 1}</span>
-          <span style="flex: 1; font-size: 11.5px; color: #e4e4e7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(v.name)}">${escapeHtml(v.name)}</span>
-          <button type="button" class="agy-tv-play-btn" data-url="${escapeHtml(v.url)}" title="Nghe thử" style="padding: 2px 6px; border-radius: 5px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.14); color: #e4e4e7; font-size: 10.5px; cursor: pointer;">▶</button>
-          <button type="button" class="agy-tv-del-btn" data-url="${escapeHtml(v.url)}" title="Xóa voice" style="padding: 2px 6px; border-radius: 5px; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.28); color: #fca5a5; font-size: 10.5px; cursor: pointer;">✕</button>
-        </div>
-      `).join('');
-
-      taskVoiceListEl.querySelectorAll('.agy-tv-play-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const url = btn.dataset.url || '';
-          if (url) playOneShotTaskAudio(url, getState().taskVoiceVol);
-        });
-      });
-      taskVoiceListEl.querySelectorAll('.agy-tv-del-btn').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const url = btn.dataset.url || '';
-          if (url) deleteSavedMediaItem('audio', url);
-        });
-      });
-    }
-
-    if (taskVoiceToggle) {
-      taskVoiceToggle.addEventListener('change', (e) => {
-        applyTheme({ taskVoiceEnabled: e.target.checked });
-      });
-    }
-    if (taskVoiceVolSlider) {
-      taskVoiceVolSlider.addEventListener('input', (e) => {
-        const v = parseInt(e.target.value, 10);
-        if (taskVoiceVolVal) taskVoiceVolVal.textContent = v + '%';
-        applyTheme({ taskVoiceVol: v }, { debounceSave: true });
-      });
-    }
-    if (taskVoiceTestBtn) {
-      taskVoiceTestBtn.addEventListener('click', () => {
-        playRandomTaskVoice(true);
-      });
-    }
-    if (taskVoiceUpload) {
-      taskVoiceUpload.addEventListener('change', async (e) => {
-        const files = Array.from((e.target && e.target.files) || []);
-        if (files.length === 0) return;
-        if (uploadStatus) uploadStatus.textContent = `Đang nạp ${files.length} voice...`;
-        let nextVoices = getMediaLibrary('audio');
-        for (const file of files) {
-          const uploaded = await uploadMediaToServer(file, 'task_voice.mp3');
-          let mediaUrl = uploaded && uploaded.url ? uploaded.url : '';
-          const displayName = (uploaded && uploaded.name) || file.name || 'Task Voice';
-          if (!mediaUrl) {
-            mediaUrl = await new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result || ''));
-              reader.onerror = () => resolve('');
-              reader.readAsDataURL(file);
-            });
-          }
-          if (mediaUrl) {
-            nextVoices = upsertSavedMedia('audio', { url: mediaUrl, name: displayName, addedAt: Date.now() });
-          }
-        }
-        taskVoiceUpload.value = '';
-        applyTheme({ taskVoices: nextVoices, taskVoiceEnabled: true });
-        if (taskVoiceToggle) taskVoiceToggle.checked = true;
-        if (uploadStatus) uploadStatus.textContent = `Đã thêm ${files.length} voice (${nextVoices.length} tổng)!`;
-        renderTaskVoiceList();
-      });
-    }
-
-    if (customVgToggle && customVgBox) {
-      customVgToggle.addEventListener('click', () => {
-        const isHidden = customVgBox.style.display === 'none';
-        customVgBox.style.display = isHidden ? 'grid' : 'none';
-        customVgToggle.textContent = isHidden ? 'Tùy chỉnh Voice & Câu chào ▴' : 'Tùy chỉnh Voice & Câu chào ▾';
-      });
-    }
-    if (greetingSaveBtn && greetingLinesEl) {
-      greetingSaveBtn.addEventListener('click', () => {
-        const lines = normalizeGreetingLines(greetingLinesEl.value.split(/\r?\n/));
-        applyTheme({ customGreetings: lines, tawaGreeting: true });
-        if (greetingToggle) greetingToggle.checked = true;
-        window.__AGY_GREETING_NEED_FRESH__ = true;
-        syncEmptyGreeting();
-        if (greetingMsgEl) {
-          greetingMsgEl.textContent = lines.length > 0 ? `Đã lưu (${lines.length} câu)` : 'Đã xóa câu chào custom';
-          setTimeout(() => { if (greetingMsgEl) greetingMsgEl.textContent = ''; }, 2000);
-        }
-      });
-    }
-    if (greetingResetBtn && greetingLinesEl) {
-      greetingResetBtn.addEventListener('click', () => {
-        greetingLinesEl.value = '';
-        applyTheme({ customGreetings: [] });
-        window.__AGY_GREETING_NEED_FRESH__ = true;
-        syncEmptyGreeting();
-        if (greetingMsgEl) {
-          greetingMsgEl.textContent = 'Đã xóa danh sách câu chào';
-          setTimeout(() => { if (greetingMsgEl) greetingMsgEl.textContent = ''; }, 2000);
-        }
-      });
-    }
-
-    async function deleteSavedMediaItem(kind, targetUrl) {
-      const isVideo = kind === 'video';
-      const isAudio = kind === 'audio';
-      const base = window.__AGY_MEDIA_BASE_URL__ ? String(window.__AGY_MEDIA_BASE_URL__).replace(/\/+$/, '') : '';
-      if (base && canonicalMediaKey(targetUrl).startsWith('user_media/')) {
-        try {
-          const resp = await fetch(`${base}/delete_media`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: targetUrl })
-          });
-          if (resp.ok) {
-            const info = await resp.json();
-            if (info && info.media) {
-              window.__AGY_USER_MEDIA__ = info.media;
-            }
-          }
-        } catch (err) {}
-      }
-
-      const nextList = removeSavedMediaFromStore(kind, targetUrl);
-      const curSt = getState();
-      const patch = isVideo ? { savedVideos: nextList } : (isAudio ? { taskVoices: nextList } : { savedImages: nextList });
-      if (isVideo && isSameMediaUrl(curSt.customVideo, targetUrl)) {
-        patch.customVideo = '';
-      } else if (!isVideo && !isAudio && isSameMediaUrl(curSt.customWp, targetUrl)) {
-        patch.customWp = '';
-      }
-      applyTheme(patch);
-      if (uploadStatus) {
-        uploadStatus.textContent = isVideo ? 'Đã xóa video khỏi thư viện!' : (isAudio ? 'Đã xóa voice khỏi danh sách!' : 'Đã xóa ảnh khỏi thư viện!');
-      }
-      if (isAudio) {
-        renderTaskVoiceList();
-      } else {
-        renderPresetsSection();
-      }
-    }
-
-    function renderPresetsSection() {
-      const host = container.querySelector('#agy-presets-section');
-      if (!host) return;
-      const curSt = getState();
-      const isVideoTab = curSt.wpMode === 'video';
-      const builtInKeys = THEME_KEYS.filter((name) => {
-        const th = THEMES[name] || {};
-        const isLive = Boolean(th.wallpaperVideo || th.mediaType === 'video');
-        return isVideoTab ? isLive : !isLive;
-      });
-      const savedItems = getMediaLibrary(isVideoTab ? 'video' : 'image');
-      const totalCount = builtInKeys.length + savedItems.length;
-
-      const headerBadge = document.getElementById('agy-custom-theme-badge');
-      if (headerBadge) {
-        headerBadge.textContent = `${totalCount} ${isVideoTab ? 'Video' : 'Ảnh'}`;
-      }
-
-      const builtInHtml = builtInKeys.map((name) => {
-        const th = THEMES[name];
-        const activeCustom = isVideoTab ? curSt.customVideo : curSt.customWp;
-        const isSelected = name === curSt.themeName && !activeCustom;
-        const wpThumb = resolveMediaUrl(th.wallpaper);
-        const thumbBg = wpThumb
-          ? `linear-gradient(180deg, rgba(0,0,0,0.15), rgba(14,12,12,0.85)), url('${sanitizeCssUrl(wpThumb)}')`
-          : (th.pureBg || th.bg);
-        const thumbOrnamentStyle = th.isOrnament
-          ? 'right: 10px; bottom: 8px; width: 76px; height: 24px; background-position: center;'
-          : 'right: 12px; bottom: 4px; width: 42px; height: 38px; background-position: bottom center;';
-        return `
-          <div class="agy-preset-card" data-name="${escapeHtml(name)}" style="border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.82); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color 0.15s ease;">
-            <div style="height: 68px; width: 100%; background-image: ${thumbBg}; background-size: cover; background-position: ${th.bgPosition || 'center'}; position: relative; display: flex; align-items: flex-end; padding: 8px 14px;">
-              ${th.sticker ? `<div style="position: absolute; ${thumbOrnamentStyle} background-image: url('${th.sticker}'); background-size: contain; background-repeat: no-repeat; pointer-events: none;"></div>` : ''}
-              <span style="font-size: 13.5px; font-weight: 600; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.7);">${escapeHtml(name)}</span>
-            </div>
-            <div style="padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 12px; color: #a1a1aa;">${escapeHtml(th.concept || '')}</span>
-              <div class="agy-card-check-slot">${isSelected ? CHECK_SVG : ''}</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      const savedHtml = savedItems.map((item) => {
-        const resolvedUrl = resolveMediaUrl(item.url);
-        const isSelected = isVideoTab
-          ? isSameMediaUrl(curSt.customVideo, item.url)
-          : isSameMediaUrl(curSt.customWp, item.url);
-        const displayName = item.name || deriveMediaName(item.url, isVideoTab ? 'Saved Video' : 'Saved Image');
-        const deleteBtnHtml = `
-          <button type="button" class="agy-saved-delete-btn" data-url="${escapeHtml(item.url)}" title="Xóa khỏi thư viện" style="position: absolute; top: 8px; right: 8px; z-index: 4; width: 24px; height: 24px; border-radius: 9999px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(10, 12, 18, 0.72); color: #fca5a5; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: background-color 0.15s ease, border-color 0.15s ease;">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
-          </button>
-        `;
-        const previewInner = isVideoTab
-          ? `
-            <video class="agy-saved-vid-thumb" src="${escapeHtml(resolvedUrl)}#t=0.5" muted loop playsinline preload="metadata" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none;"></video>
-            <div style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.12), rgba(14,12,12,0.86)); pointer-events: none;"></div>
-            <span style="position: absolute; top: 8px; left: 10px; z-index: 3; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; padding: 2px 6px; border-radius: 9999px; background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(56, 189, 248, 0.35); color: #bae6fd;">VIDEO</span>
-          `
-          : `
-            <div style="position: absolute; inset: 0; background-image: linear-gradient(180deg, rgba(0,0,0,0.12), rgba(14,12,12,0.86)), url('${sanitizeCssUrl(resolvedUrl)}'); background-size: cover; background-position: center; pointer-events: none;"></div>
-            <span style="position: absolute; top: 8px; left: 10px; z-index: 3; font-size: 10px; font-weight: 600; letter-spacing: 0.4px; padding: 2px 6px; border-radius: 9999px; background: rgba(15, 23, 42, 0.75); border: 1px solid rgba(251, 191, 36, 0.35); color: #fde68a;">ẢNH</span>
-          `;
-
-        return `
-          <div class="agy-saved-media-card" data-url="${escapeHtml(item.url)}" data-kind="${isVideoTab ? 'video' : 'image'}" style="border-radius: 12px; border: ${isSelected ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)'}; background: rgba(14, 12, 12, 0.82); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; transition: border-color 0.15s ease;">
-            <div style="height: 68px; width: 100%; position: relative; display: flex; align-items: flex-end; padding: 8px 14px; background: rgba(18, 20, 28, 0.9);">
-              ${previewInner}
-              ${deleteBtnHtml}
-              <span style="position: relative; z-index: 3; font-size: 13px; font-weight: 600; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.85); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;">${escapeHtml(displayName)}</span>
-            </div>
-            <div style="padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 12px; color: #a1a1aa;">${isVideoTab ? 'Video đã lưu' : 'Ảnh tĩnh đã lưu'}</span>
-              <div class="agy-card-check-slot">${isSelected ? CHECK_SVG : ''}</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-
-      host.innerHTML = `
-        <div style="font-size: 15px; font-weight: 600; color: #ffffff; margin-bottom: 4px;">Theme Presets — ${isVideoTab ? 'Video động' : 'Ảnh tĩnh'} (${totalCount})</div>
-        <div style="font-size: 12.5px; color: #a1a1aa; margin-bottom: 14px;">${isVideoTab ? 'Live wallpaper mặc định & toàn bộ video nền bạn đã từng chọn.' : 'Preset tĩnh mặc định & toàn bộ ảnh nền bạn đã từng chọn.'}</div>
-        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-          ${builtInHtml}
-          ${savedHtml}
-        </div>
-      `;
-
-      host.querySelectorAll('.agy-preset-card').forEach((card) => {
-        card.addEventListener('click', () => {
-          const name = card.dataset.name;
-          if (isVideoTab) {
-            applyTheme({ themeName: name, bubbleName: name, customVideo: '', wpMode: 'video', wpEnabled: true });
-          } else {
-            applyTheme({ themeName: name, bubbleName: name, customWp: '', wpMode: 'image', wpEnabled: true });
-          }
-          if (wpToggle) wpToggle.checked = true;
-          if (uploadStatus) uploadStatus.textContent = '';
-
-          container.querySelectorAll('.agy-bubble-card').forEach((b) => {
-            const isSel = b.dataset.name === name;
-            b.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
-            b.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
-            const slot = b.querySelector('.agy-card-check-slot');
-            if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
-          });
-
-          updateInputPreviews(name);
-          renderPresetsSection();
-        });
-      });
-
-      host.querySelectorAll('.agy-saved-media-card').forEach((card) => {
-        const vidThumb = card.querySelector('.agy-saved-vid-thumb');
-        if (vidThumb) {
-          card.addEventListener('mouseenter', () => {
-            vidThumb.play().catch(() => {});
-          });
-          card.addEventListener('mouseleave', () => {
-            vidThumb.pause();
-          });
-        }
-        card.addEventListener('click', () => {
-          const url = card.dataset.url || '';
-          const kind = card.dataset.kind || 'image';
-          if (!url) return;
-          if (kind === 'video') {
-            applyTheme({ wpMode: 'video', customVideo: url, wpEnabled: true });
-            syncModeButtons('video');
-            if (uploadStatus) uploadStatus.textContent = '';
-          } else {
-            applyTheme({ wpMode: 'image', customWp: url, wpEnabled: true });
-            syncModeButtons('image');
-            if (uploadStatus) uploadStatus.textContent = '';
-          }
-          if (wpToggle) wpToggle.checked = true;
-          renderPresetsSection();
-          triggerRevealOnReady(kind);
-        });
-      });
-
-      host.querySelectorAll('.agy-saved-delete-btn').forEach((btn) => {
-        btn.addEventListener('mouseenter', () => {
-          btn.style.background = 'rgba(220, 38, 38, 0.85)';
-          btn.style.borderColor = 'rgba(248, 113, 113, 0.9)';
-          btn.style.color = '#ffffff';
-        });
-        btn.addEventListener('mouseleave', () => {
-          btn.style.background = 'rgba(10, 12, 18, 0.72)';
-          btn.style.borderColor = 'rgba(255, 255, 255, 0.22)';
-          btn.style.color = '#fca5a5';
-        });
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          const url = btn.dataset.url || '';
-          if (!url) return;
-          deleteSavedMediaItem(isVideoTab ? 'video' : 'image', url);
-        });
-      });
-    }
-
-    renderPresetsSection();
-    renderTaskVoiceList();
-
-    (async () => {
-      const base = window.__AGY_MEDIA_BASE_URL__ ? String(window.__AGY_MEDIA_BASE_URL__).replace(/\/+$/, '') : '';
-      if (!base) return;
-      try {
-        const resp = await fetch(`${base}/user_media_list`);
-        if (!resp.ok) return;
-        const info = await resp.json();
-        if (info && info.ok) {
-          window.__AGY_USER_MEDIA__ = {
-            images: Array.isArray(info.images) ? info.images : [],
-            videos: Array.isArray(info.videos) ? info.videos : [],
-            audios: Array.isArray(info.audios) ? info.audios : []
-          };
-          if (document.body.contains(container)) {
-            renderPresetsSection();
-            renderTaskVoiceList();
-          }
-        }
-      } catch (err) {}
-    })();
-
-    container.querySelectorAll('.agy-bubble-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const name = card.dataset.name;
-        applyTheme({ bubbleName: name });
-
-        container.querySelectorAll('.agy-bubble-card').forEach(b => {
-          const isSel = b.dataset.name === name;
-          b.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
-          b.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
-          const slot = b.querySelector('.agy-card-check-slot');
-          if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
-        });
-
-        updateInputPreviews(name);
-      });
-    });
-
-    container.querySelectorAll('.agy-input-card').forEach(card => {
-      card.addEventListener('click', () => {
-        const styleKey = card.dataset.style;
-        applyTheme({ inputStyle: styleKey });
-
-        container.querySelectorAll('.agy-input-card').forEach(c => {
-          const isSel = c.dataset.style === styleKey;
-          c.style.border = isSel ? '1.5px solid #f4f4f5' : '1px solid rgba(255, 255, 255, 0.12)';
-          c.style.background = isSel ? 'rgba(42, 34, 30, 0.68)' : 'rgba(14, 12, 12, 0.78)';
-          const slot = c.querySelector('.agy-card-check-slot');
-          if (slot) slot.innerHTML = isSel ? CHECK_SVG : '';
-        });
-      });
-    });
+    loadLazyModule('studio')
+      .then((fn) => { if (typeof fn === 'function') fn(window.__AGY_INTERNAL__); })
+      .catch(() => {});
   }
 
   function injectMainSidebarButton() {
@@ -4424,8 +2023,13 @@
     const sw = sidebarPane ? Math.round(sidebarPane.getBoundingClientRect().width) : 0;
     const shellRect = shell.getBoundingClientRect();
     const hdrBottom = titleBar ? Math.round(titleBar.getBoundingClientRect().bottom - shellRect.top) : 35;
-    shell.style.setProperty('--agy-sidebar-w', sw + 'px');
-    shell.style.setProperty('--agy-hdr-h', hdrBottom + 'px');
+
+    const ms = window.__AGY_METRICS_STATE__ || (window.__AGY_METRICS_STATE__ = {
+      glassBg: '',
+      beforeClip: '',
+      holeClip: ''
+    });
+    const baseClip = `polygon(0 0, 100% 0, 100% ${hdrBottom}px, ${sw}px ${hdrBottom}px, ${sw}px 100%, 0 100%)`;
 
     const hasHoleAttr = document.body.getAttribute('data-has-browser-hole') === 'true';
     const holeEl = hasHoleAttr ? shell.querySelector('[data-browser-hole]:not([data-browser-hole="false"])') : null;
@@ -4440,18 +2044,16 @@
         const t = Math.max(0, Math.round(hRect.top - shellRect.top));
         const r = Math.max(l, Math.round(hRect.right - shellRect.left));
         const b = Math.max(t, Math.round(hRect.bottom - shellRect.top));
-        shell.style.setProperty(
-          '--agy-hole-clip',
-          `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l}px ${t}px, ${r}px ${t}px, ${r}px ${b}px, ${l}px ${b}px, ${l}px ${t}px)`
-        );
+        ms.holeClip = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${l}px ${t}px, ${r}px ${t}px, ${r}px ${b}px, ${l}px ${b}px, ${l}px ${t}px)`;
+        ms.beforeClip = baseClip;
         shell.dataset.agyHoleActive = '1';
-        delete shell.dataset.agySideGlass;
+        flushMetricsStyle();
         return;
       }
     }
     window.__AGY_HOLE_EL__ = null;
     delete shell.dataset.agyHoleActive;
-    shell.style.removeProperty('--agy-hole-clip');
+    ms.holeClip = '';
 
     const sideBody = shell.querySelector('[data-side-panel-body="true"]');
     if (sideBody) {
@@ -4472,16 +2074,14 @@
         const sr = Math.min(Math.round(shellRect.width), Math.max(sl, Math.round(sRect.right - shellRect.left)));
         const sb = Math.min(Math.round(shellRect.height), Math.max(st, Math.round(sRect.bottom - shellRect.top)));
         if (sr - sl > 20 && sb - st > 20) {
-          shell.style.setProperty('--agy-side-l', sl + 'px');
-          shell.style.setProperty('--agy-side-t', st + 'px');
-          shell.style.setProperty('--agy-side-r', sr + 'px');
-          shell.style.setProperty('--agy-side-b', sb + 'px');
-          shell.dataset.agySideGlass = '1';
+          ms.beforeClip = `polygon(evenodd, 0 0, 100% 0, 100% ${hdrBottom}px, ${sw}px ${hdrBottom}px, ${sw}px 100%, 0 100%, 0 0, ${sl}px ${st}px, ${sr}px ${st}px, ${sr}px ${sb}px, ${sl}px ${sb}px, ${sl}px ${st}px)`;
+          flushMetricsStyle();
           return;
         }
       }
     }
-    delete shell.dataset.agySideGlass;
+    ms.beforeClip = baseClip;
+    flushMetricsStyle();
   }
 
   function syncMarkdownTableWrappers() {
@@ -4501,6 +2101,10 @@
     if (!shell) return;
     if (!shell.dataset.agyTboMounted) {
       shell.dataset.agyTboMounted = '1';
+      if (shell.dataset.agySideGlass) delete shell.dataset.agySideGlass;
+      ['--agy-hole-clip', '--agy-l-glass-bg', '--agy-sidebar-w', '--agy-hdr-h', '--agy-side-l', '--agy-side-t', '--agy-side-r', '--agy-side-b'].forEach((p) => {
+        if (shell.style.getPropertyValue(p)) shell.style.removeProperty(p);
+      });
       scheduleTitleBarSync();
     }
     const shellChanged = window.__AGY_METRICS_SHELL__ !== shell;
@@ -4533,8 +2137,7 @@
 
   function pickTawaGreeting() {
     const st = getState();
-    const customList = Array.isArray(st.customGreetings) ? st.customGreetings.filter(Boolean) : [];
-    const pool = customList.length > 0 ? customList : DEFAULT_CUSTOM_GREETINGS;
+    const pool = Array.isArray(st.customGreetings) ? st.customGreetings.filter(Boolean) : [];
     if (!pool.length) return '';
     const prev = window.__AGY_LAST_GREETING__;
     const choices = pool.length > 1 ? pool.filter(s => s !== prev) : pool;
@@ -4545,16 +2148,19 @@
 
   function syncEmptyGreeting(stOverride) {
     const st = stOverride || getState();
-    const shell = findActiveShell();
-    if (!shell) return;
     const hasCustom = Array.isArray(st.customGreetings) && st.customGreetings.some(Boolean);
-    if (!st.tawaGreeting || (!hasCustom && !DEFAULT_CUSTOM_GREETINGS.length)) {
-      shell.querySelectorAll('[data-agy-greeting]').forEach((el) => {
-        el.removeAttribute('data-agy-greeting');
-        delete el.dataset.agyGreetingOrig;
-      });
+    if (!st.tawaGreeting || (!hasCustom)) {
+      if (window.__AGY_GREETING_ACTIVE__) {
+        window.__AGY_GREETING_ACTIVE__ = false;
+        document.querySelectorAll('[data-agy-greeting]').forEach((el) => {
+          el.removeAttribute('data-agy-greeting');
+          delete el.dataset.agyGreetingOrig;
+        });
+      }
       return;
     }
+    const shell = findActiveShell();
+    if (!shell) return;
     const root = shell.querySelector('[data-main-content-body="true"]') || shell;
     const hasChat = Boolean(root.querySelector('[data-testid="agent-response"], .agy-user-bubble-frame'));
     if (hasChat) {
@@ -4576,6 +2182,7 @@
         el.setAttribute('data-agy-greeting', pickTawaGreeting());
         window.__AGY_GREETING_NEED_FRESH__ = false;
       }
+      window.__AGY_GREETING_ACTIVE__ = true;
       break;
     }
   }
@@ -4695,18 +2302,65 @@
     syncTaskCompletionVoice();
   }
 
-  function scheduleTick() {
-    if (window.__AGY_TICK_RAF__) return;
-    window.__AGY_TICK_RAF__ = requestAnimationFrame(() => {
-      window.__AGY_TICK_RAF__ = 0;
-      tick(false);
-    });
+  function scheduleTick(mutations) {
+    const attrChanged = Array.isArray(mutations) && mutations.some((m) => m.type === 'attributes');
+    if (attrChanged) {
+      window.__AGY_FORCE_METRICS__ = true;
+      if (window.__AGY_TICK_TIMER__) {
+        clearTimeout(window.__AGY_TICK_TIMER__);
+        window.__AGY_TICK_TIMER__ = 0;
+      }
+      if (!window.__AGY_TICK_RAF__) {
+        window.__AGY_TICK_RAF__ = requestAnimationFrame(() => {
+          window.__AGY_TICK_RAF__ = 0;
+          const force = Boolean(window.__AGY_FORCE_METRICS__);
+          window.__AGY_FORCE_METRICS__ = false;
+          tick(force);
+        });
+      }
+      return;
+    }
+    if (window.__AGY_TICK_RAF__ || window.__AGY_TICK_TIMER__) return;
+    if (!document.getElementById('agy-custom-theme-sidebar-btn')) {
+      window.__AGY_TICK_RAF__ = requestAnimationFrame(() => {
+        window.__AGY_TICK_RAF__ = 0;
+        tick(false);
+      });
+    } else {
+      window.__AGY_TICK_TIMER__ = setTimeout(() => {
+        window.__AGY_TICK_TIMER__ = 0;
+        tick(false);
+      }, 180);
+    }
   }
 
+  window.__AGY_INTERNAL__ = {
+    THEMES, BOOT_ASSETS, THEME_KEYS, DEFAULT_THEME_KEY,
+    STORAGE_THEME, STORAGE_BUBBLE, STORAGE_INPUT, STORAGE_DIMMING,
+    STORAGE_WP_ENABLED, STORAGE_WP_MODE, STORAGE_CUSTOM_WP, STORAGE_CUSTOM_VIDEO,
+    STORAGE_TASK_VOICE_ENABLED, STORAGE_TASK_VOICE_VOL, STORAGE_CUSTOM_GREETINGS,
+    STORAGE_USER_AVATAR, STORAGE_AGENT_AVATAR, STORAGE_GLASS_BLUR,
+    STORAGE_AVATAR_SIZE, STORAGE_AVATAR_RADIUS, STORAGE_BOOT_INTRO,
+    STORAGE_SKETCH_REVEAL, STORAGE_TAWA_GREETING,
+    CHECK_SVG, INPUT_STYLES,
+    escapeHtml, canonicalMediaKey, isSameMediaUrl, deriveMediaName,
+    getMediaLibrary, upsertSavedMedia, removeSavedMediaFromStore,
+    normalizeGreetingLines, getState, resolveMediaUrl, sanitizeCssUrl,
+    findActiveShell, clearRevealRaf, clearBootTimers, stopBootAudio,
+    teardownBootOverlay, scheduleRevealWhenReady, applyTheme,
+    syncEmptyGreeting, playOneShotTaskAudio, playRandomTaskVoice,
+    mountBootSequence, triggerSketchBloomReveal
+  };
+
+  invalidateStateCache();
   clearTitleBarTimers();
   if (window.__AGY_TICK_RAF__) {
     cancelAnimationFrame(window.__AGY_TICK_RAF__);
     window.__AGY_TICK_RAF__ = 0;
+  }
+  if (window.__AGY_TICK_TIMER__) {
+    clearTimeout(window.__AGY_TICK_TIMER__);
+    window.__AGY_TICK_TIMER__ = 0;
   }
   if (window.__AGY_SHELL_RO__) {
     try { window.__AGY_SHELL_RO__.disconnect(); } catch (e) {}
@@ -4732,6 +2386,7 @@
     window.__AGY_TASK_COMPLETE_TIMER__ = null;
   }
   window.__AGY_SCROLL_AC__ = new AbortController();
+  window.addEventListener('storage', invalidateStateCache, { signal: window.__AGY_SCROLL_AC__.signal });
   document.addEventListener('click', (e) => {
     if (e.target && typeof e.target.closest === 'function' && e.target.closest('[data-testid="input-cancel-button"]')) {
       taskVoiceState.userCancelledAt = Date.now();

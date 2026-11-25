@@ -1,11 +1,10 @@
-//! Lazy HTTP Payload Compiler: merges themes/themes.json + engine/core.js -> dist/theme_payload.js.
-//! Small SVGs & Mali WOFF2 greeting fonts are inlined; heavy rasters, MP4s, starfield & voices stay as
-//! relative paths served on-demand by the Rust Local HTTP Media Server (Decision D3).
+//! Lazy HTTP Payload Compiler: merges themes/themes.json + engine/core.js -> dist/theme_payload.js
+//! and emits compacted lazy modules (`studio.js`, `boot.js`, `reveal.js`) beside it.
+//! Only small SVGs are inlined; wallpapers, MP4s, starfield, voices & Mali fonts load on-demand via HTTP.
 
 use crate::config::atomic_write;
+use crate::md5::Md5;
 use crate::Result;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,6 +20,29 @@ const ASSET_KEYS: &[&str] = &[
 ];
 const PLACEHOLDER: &str = "/*__THEMES_PLACEHOLDER__*/{}";
 const BOOT_ASSETS_PLACEHOLDER: &str = "/*__BOOT_ASSETS_PLACEHOLDER__*/{}";
+const BUILD_VER_PLACEHOLDER: &str = r#"/*__BUILD_VER_PLACEHOLDER__*/"dev""#;
+const LAZY_MODULES: &[&str] = &["studio.js", "boot.js", "reveal.js"];
+
+/// Strips indentation, blank lines, and pure `//` comment lines to cut parse/payload size safely.
+pub fn compact_js(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "//"
+            || trimmed.starts_with("// ")
+            || trimmed.starts_with("//=")
+            || trimmed.starts_with("//-")
+        {
+            continue;
+        }
+        out.push_str(trimmed);
+        out.push('\n');
+    }
+    out
+}
 
 #[derive(Debug, Clone)]
 pub struct BuildOptions {
@@ -117,7 +139,6 @@ pub fn resolve_asset_value(value: &Value, themes_dir: &Path) -> Result<Value> {
 }
 
 pub fn build_boot_assets(themes_dir: &Path) -> Result<Map<String, Value>> {
-    let assets_dir = themes_dir.join("assets");
     let mut boot = Map::new();
 
     let lazy_candidates = [
@@ -127,30 +148,14 @@ pub fn build_boot_assets(themes_dir: &Path) -> Result<Map<String, Value>> {
         ("voice2", "assets/voice/tawa_voice2.mp3"),
         ("voice3", "assets/voice/tawa_voice3.mp3"),
         ("voice4", "assets/voice/tawa_voice4.mp3"),
+        ("greetingFontVi", "assets/fonts/mali-500-vi.woff2"),
+        ("greetingFontLatinExt", "assets/fonts/mali-500-latin-ext.woff2"),
+        ("greetingFontLatin", "assets/fonts/mali-500-latin.woff2"),
     ];
     for (key, rel) in lazy_candidates {
         let full = themes_dir.join(rel);
         if full.is_file() {
             boot.insert(key.into(), Value::String(rel.into()));
-        }
-    }
-
-    let font_candidates = [
-        ("greetingFontVi", assets_dir.join("fonts").join("mali-500-vi.woff2")),
-        (
-            "greetingFontLatinExt",
-            assets_dir.join("fonts").join("mali-500-latin-ext.woff2"),
-        ),
-        (
-            "greetingFontLatin",
-            assets_dir.join("fonts").join("mali-500-latin.woff2"),
-        ),
-    ];
-    for (key, path) in font_candidates {
-        if path.is_file() {
-            let bytes = fs::read(&path)?;
-            let encoded = format!("data:font/woff2;base64,{}", BASE64.encode(bytes));
-            boot.insert(key.into(), Value::String(encoded));
         }
     }
 
@@ -212,8 +217,34 @@ pub fn build_payload(opts: &BuildOptions) -> Result<BuildReport> {
         compiled = compiled.replacen(BOOT_ASSETS_PLACEHOLDER, &boot_json, 1);
     }
 
-    let size_bytes = compiled.len();
-    atomic_write(&opts.out_path, compiled.as_bytes())?;
+    let engine_dir = opts.engine_path.parent().unwrap_or_else(|| Path::new("."));
+    let out_dir = opts.out_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut compacted_lazy: Vec<(PathBuf, String)> = Vec::new();
+    let mut ver_hasher = Md5::new();
+    for mod_name in LAZY_MODULES {
+        let src_path = engine_dir.join(mod_name);
+        if src_path.is_file() {
+            let mod_src = fs::read_to_string(&src_path)?;
+            let compacted = compact_js(&mod_src);
+            ver_hasher.update(compacted.as_bytes());
+            compacted_lazy.push((out_dir.join(mod_name), compacted));
+        }
+    }
+
+    let pre_compact = compact_js(&compiled);
+    ver_hasher.update(pre_compact.as_bytes());
+    let build_ver = &ver_hasher.finalize_hex()[..8];
+    let final_payload = if pre_compact.contains(BUILD_VER_PLACEHOLDER) {
+        pre_compact.replacen(BUILD_VER_PLACEHOLDER, &format!("\"{build_ver}\""), 1)
+    } else {
+        pre_compact
+    };
+
+    let size_bytes = final_payload.len();
+    atomic_write(&opts.out_path, final_payload.as_bytes())?;
+    for (dest, content) in compacted_lazy {
+        atomic_write(&dest, content.as_bytes())?;
+    }
 
     Ok(BuildReport {
         out_path: opts.out_path.clone(),
@@ -287,7 +318,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let tmp_out = std::env::temp_dir().join(format!("agy_lazy_payload_{stamp}.js"));
+        let tmp_dir = std::env::temp_dir().join(format!("agy_lazy_build_{stamp}"));
+        let tmp_out = tmp_dir.join("theme_payload.js");
 
         let report = build_payload(&BuildOptions {
             themes_path: paths.themes_json.clone(),
@@ -306,19 +338,23 @@ mod tests {
             ]
         );
         assert!(
-            report.size_bytes < 350_000,
-            "Lazy HTTP payload should be < 350 KB, got {} bytes",
+            report.size_bytes < 120_000,
+            "Split & compacted Lazy HTTP payload should be < 120 KB, got {} bytes",
             report.size_bytes
         );
 
         let compiled = fs::read_to_string(&tmp_out).unwrap();
-        let node_status = std::process::Command::new("node")
-            .arg("--check")
-            .arg(&tmp_out)
-            .status()
-            .expect("node --check should execute");
-        let _ = fs::remove_file(&tmp_out);
-        assert!(node_status.success(), "node --check failed on built Lazy HTTP payload");
+        for js_file in ["theme_payload.js", "studio.js", "boot.js", "reveal.js"] {
+            let fp = tmp_dir.join(js_file);
+            assert!(fp.is_file(), "Missing emitted JS module: {}", fp.display());
+            let node_status = std::process::Command::new("node")
+                .arg("--check")
+                .arg(&fp)
+                .status()
+                .expect("node --check should execute");
+            assert!(node_status.success(), "node --check failed on {js_file}");
+        }
+        let _ = fs::remove_dir_all(&tmp_dir);
         eprintln!(
             "[builder-test] Lazy HTTP payload: {} bytes ({:.1} KB) built in {} ms",
             report.size_bytes,
@@ -328,8 +364,10 @@ mod tests {
 
         assert!(!compiled.contains(PLACEHOLDER));
         assert!(!compiled.contains(BOOT_ASSETS_PLACEHOLDER));
+        assert!(!compiled.contains(BUILD_VER_PLACEHOLDER));
         assert!(compiled.contains("data:image/svg+xml,"));
-        assert!(compiled.contains("data:font/woff2;base64,"));
+        assert!(!compiled.contains("data:font/woff2;base64,"));
+        assert!(compiled.contains("assets/fonts/mali-500-vi.woff2"));
         assert!(compiled.contains("assets/wlop_cosmic_2k.webp"));
         assert!(compiled.contains("assets/wallpapergeminichan.mp4"));
         assert!(compiled.contains("assets/voice/tawa_voice1.mp3"));

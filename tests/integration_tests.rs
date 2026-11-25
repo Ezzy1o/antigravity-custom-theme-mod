@@ -140,14 +140,16 @@ fn cli_build_lazy_http_payload_and_syntax_check() {
 
     let compiled = fs::read_to_string(&out_payload).expect("read built payload");
     assert!(
-        compiled.len() < 350_000,
-        "Lazy HTTP payload exceeded 350 KB: {} bytes",
+        compiled.len() < 120_000,
+        "Split & compacted Lazy HTTP payload exceeded 120 KB: {} bytes",
         compiled.len()
     );
     assert!(!compiled.contains("/*__THEMES_PLACEHOLDER__*/{}"));
     assert!(!compiled.contains("/*__BOOT_ASSETS_PLACEHOLDER__*/{}"));
+    assert!(!compiled.contains(r#"/*__BUILD_VER_PLACEHOLDER__*/"dev""#));
     assert!(compiled.contains("data:image/svg+xml,"));
-    assert!(compiled.contains("data:font/woff2;base64,"));
+    assert!(!compiled.contains("data:font/woff2;base64,"));
+    assert!(compiled.contains("assets/fonts/mali-500-vi.woff2"));
 
     for rel_asset in [
         "assets/wlop_cosmic_2k.webp",
@@ -171,12 +173,16 @@ fn cli_build_lazy_http_payload_and_syntax_check() {
         "Built payload must contain zero live backdrop-filter blur rules"
     );
 
-    let node_check = Command::new("node")
-        .arg("--check")
-        .arg(&out_payload)
-        .status()
-        .expect("execute node --check");
-    assert!(node_check.success(), "node --check failed on Lazy HTTP payload");
+    for js_file in ["theme_payload.js", "studio.js", "boot.js", "reveal.js"] {
+        let fp = tmp.path().join(js_file);
+        assert!(fp.is_file(), "Missing emitted JS module: {js_file}");
+        let node_check = Command::new("node")
+            .arg("--check")
+            .arg(&fp)
+            .status()
+            .expect("execute node --check");
+        assert!(node_check.success(), "node --check failed on {js_file}");
+    }
 }
 
 #[test]
@@ -257,8 +263,13 @@ fn media_server_full_http_contract() {
     );
     assert_eq!(st_416, 416);
 
-    // 6. Traversal attempts -> 404
-    for trav_path in ["/assets/../../secret.txt", "/user_media/%2e%2e/secret.txt"] {
+    // 6. Traversal attempts & /engine allowlist
+    for trav_path in [
+        "/assets/../../secret.txt",
+        "/user_media/%2e%2e/secret.txt",
+        "/engine/core.js",
+        "/engine/../Cargo.toml",
+    ] {
         let (st_trav, _, _) = http_raw(
             port,
             format!(
@@ -266,8 +277,23 @@ fn media_server_full_http_contract() {
             )
             .as_bytes(),
         );
-        assert_eq!(st_trav, 404, "Traversal path must be blocked: {trav_path}");
+        assert_eq!(st_trav, 404, "Traversal/disallowed path must be blocked: {trav_path}");
     }
+
+    let engine_dir = tmp.path().join("engine");
+    fs::create_dir_all(&engine_dir).expect("create engine dir");
+    fs::write(engine_dir.join("studio.js"), b"window.__AGY_LAZY_STUDIO__=function(){};")
+        .expect("write studio.js");
+    let (st_eng, hdr_eng, body_eng) = http_raw(
+        port,
+        format!(
+            "GET /engine/studio.js?v=12345678 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    assert_eq!(st_eng, 200);
+    assert!(hdr_eng.contains("application/javascript"));
+    assert!(body_eng.starts_with(b"window.__AGY_LAZY_STUDIO__"));
 
     // 7. OPTIONS /upload -> 204 with CORS
     let (st_opt, hdr_opt, _) = http_raw(
