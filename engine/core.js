@@ -3563,6 +3563,72 @@
       });
     }
 
+    function compressWallpaperImageFile(file, maxDim = 2560) {
+      if (!file || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return Promise.resolve(file);
+      }
+      const lowerName = String(file.name || '').toLowerCase();
+      const lowerType = String(file.type || '').toLowerCase();
+      if (lowerType === 'image/gif' || lowerType === 'image/svg+xml' || /\.(gif|svg)$/i.test(lowerName)) {
+        return Promise.resolve(file);
+      }
+      return new Promise((resolve) => {
+        const objUrl = URL.createObjectURL(file);
+        const img = new Image();
+        const cleanup = () => { try { URL.revokeObjectURL(objUrl); } catch (e) {} };
+        img.onload = () => {
+          try {
+            const natW = img.naturalWidth || 0;
+            const natH = img.naturalHeight || 0;
+            const longest = Math.max(natW, natH);
+            if (!longest || (longest <= maxDim && file.size <= 1.5 * 1024 * 1024)) {
+              cleanup();
+              resolve(file);
+              return;
+            }
+            const scale = longest > maxDim ? (maxDim / longest) : 1;
+            const targetW = Math.max(1, Math.round(natW * scale));
+            const targetH = Math.max(1, Math.round(natH * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = targetW;
+            canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              cleanup();
+              resolve(file);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, targetW, targetH);
+            cleanup();
+            if (typeof canvas.toBlob === 'function') {
+              canvas.toBlob((blob) => {
+                canvas.width = 0;
+                canvas.height = 0;
+                if (blob && blob.size > 0 && (longest > maxDim || blob.size < file.size)) {
+                  const base = String(file.name || 'wallpaper').replace(/\.[^.]+$/, '');
+                  resolve(new File([blob], `${base}.webp`, { type: 'image/webp' }));
+                } else {
+                  resolve(file);
+                }
+              }, 'image/webp', 0.88);
+            } else {
+              canvas.width = 0;
+              canvas.height = 0;
+              resolve(file);
+            }
+          } catch (e) {
+            cleanup();
+            resolve(file);
+          }
+        };
+        img.onerror = () => {
+          cleanup();
+          resolve(file);
+        };
+        img.src = objUrl;
+      });
+    }
+
     async function uploadMediaToServer(file, fallbackName) {
       const base = window.__AGY_MEDIA_BASE_URL__ ? String(window.__AGY_MEDIA_BASE_URL__).replace(/\/+$/, '') : '';
       if (!base) return null;
@@ -3605,21 +3671,22 @@
       if (!file) return;
       const isVideo = (file.type && file.type.startsWith('video/')) || /\.(mp4|webm|mov|m4v)$/i.test(file.name || '');
       const kind = isVideo ? 'video' : 'image';
-      if (uploadStatus) uploadStatus.textContent = isVideo ? 'Đang nạp video...' : 'Đang nạp ảnh nền...';
+      if (uploadStatus) uploadStatus.textContent = isVideo ? 'Đang nạp video...' : 'Đang tối ưu & nạp ảnh nền...';
 
-      const uploaded = await uploadMediaToServer(file, isVideo ? 'custom.mp4' : 'custom.png');
+      const preparedFile = isVideo ? file : await compressWallpaperImageFile(file, 2560);
+      const uploaded = await uploadMediaToServer(preparedFile, isVideo ? 'custom.mp4' : 'custom.webp');
       let mediaUrl = uploaded && uploaded.url ? uploaded.url : '';
-      const displayName = (uploaded && uploaded.name) || file.name || (isVideo ? 'Custom Video' : 'Custom Image');
+      const displayName = (uploaded && uploaded.name) || preparedFile.name || (isVideo ? 'Custom Video' : 'Custom Image');
 
       if (!mediaUrl) {
         if (isVideo) {
-          mediaUrl = URL.createObjectURL(file);
+          mediaUrl = URL.createObjectURL(preparedFile);
         } else {
           mediaUrl = await new Promise((resolve) => {
             const reader = new FileReader();
             reader.onload = () => resolve(String(reader.result || ''));
             reader.onerror = () => resolve('');
-            reader.readAsDataURL(file);
+            reader.readAsDataURL(preparedFile);
           });
         }
       }

@@ -20,7 +20,9 @@
 | `overlayRgb` | `"R, G, B"` | Yes | Base RGB triplet for wallpaper tint/scrim and unified glass overlay |
 | `bgPosition` | css background-position | Optional | Focal point alignment (`"center center"`, `"center 20%"`, etc.) |
 | `pureBg` | css background | Optional | Pure-CSS multi-layer gradient used when `wallpaper` is `""` |
-| `wallpaper` | string | Yes | Relative asset path (`"assets/foo.webp"`), `data:` URI, or `""` for CSS-only |
+| `wallpaper` | string | Yes | Relative asset path (`"assets/foo.webp"`), `data:` URI, or `""` for CSS-only (also serves as poster for video themes) |
+| `wallpaperVideo` | string | Optional | Relative MP4/WebM path (`"assets/furina-bg.mp4"`) streamed over HTTP `Range 206` by Rust Media Server |
+| `mediaType` | string | Optional | `"video"` for live animated MP4 presets, `"image"` (default) for static/CSS presets |
 | `sidebarBg` | rgba string | Yes | Left navigation rail tint |
 | `sidebarBlur` | string | Optional | Passed only to offscreen pre-baked texture sampler (`syncPrebakedGlass`) — never applied as live CSS `backdrop-filter` |
 | `sidebarHoverBg` | rgba string | Yes | Hover highlight on sidebar conversation rows |
@@ -49,12 +51,13 @@
 | `uiTextColor`, `uiMutedColor` | css color | Optional | Override header/sidebar/body primary and muted ink (defaults adapt to `isLight`) |
 | `pillBg`, `pillHoverBg`, `pillTextColor`, `pillBorder` | css color | Optional | Custom styling for composer strip pills (`No Project`, `Local Checkout`, branch trigger) |
 
-## Asset Resolution (`scripts/build_payload.py`)
+## Asset Resolution (`src/builder.rs` — `agy-theme build`)
 
-When compiling `dist/theme_payload.js`:
-- Values under `wallpaper`, `sticker`, `cornerSvg`, `userAvatar`, and `agentAvatar` that point to local paths (relative to `themes/`) are inlined into `data:` URIs.
-- `.svg` files become URL-encoded `data:image/svg+xml,...`.
-- Raster images (`.png`, `.jpg`, `.jpeg`, `.webp`) are resized down to max `2560px` (`256px` for `userAvatar`/`agentAvatar`) and converted to WebP (`quality=88`) when Pillow is installed, keeping payload size ~200–600 KB.
+When compiling `dist/theme_payload.js` via Lazy HTTP mode:
+- `.svg` files under `sticker` and `cornerSvg` are inlined as URL-encoded `data:image/svg+xml,...`.
+- Mali 500 WOFF2 greeting font subsets (`themes/assets/fonts/`) are inlined in `BOOT_ASSETS` as `data:font/woff2;base64,...`.
+- Heavy rasters (`wallpaper`, `userAvatar`, `agentAvatar`), live MP4 videos (`wallpaperVideo`), Boot Starfield (`starfield-boot-bg.jpg`), Boot Icon (`agy-icon-color.png`), and Tawa Voice MP3s (`themes/assets/voice/`) are verified to exist on disk at build time and kept as relative `assets/...` paths, served on demand with HTTP `Range 206` & `Cache-Control` by the Rust Local HTTP Media Server (`http://127.0.0.1:47821`).
+- Custom user uploads through Theme Studio automatically downscale oversized static wallpapers (> `2560px`) to WebP on the client before `POST /upload` to keep GPU texture memory low.
 - Leave `wallpaper` as `""` and supply `pureBg` for zero-image gradient presets (e.g. `Midnight Obsidian`).
 
 ## Antigravity UI Targets Handled by `engine/core.js`

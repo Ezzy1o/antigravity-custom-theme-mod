@@ -9,12 +9,11 @@ Creates and applies custom glassmorphic themes (wallpapers, cohesive palettes, c
 
 ## Repository Layout
 
-- `themes/themes.json` — Theme presets (colors, wallpaper path, SVG ornaments, glass alpha/saturation defaults).
-- `themes/assets/` — Raster wallpapers (`.webp`/`.png`/`.jpg`) and SVG stickers/corner flourishes.
-- `engine/core.js` — Standalone DOM + CSS injection engine (Zero Live Blur, L-glass layout, split-browser hole cutout, composer pill contrast, live theme settings modal).
-- `scripts/build_payload.py` — Compiles `themes/themes.json` + `engine/core.js` into gitignored `dist/theme_payload.js` (auto-downscales >2560px rasters to WebP when Pillow is installed).
-- `daemon/theme_daemon.js` — Cross-platform Node.js (>= 22) CDP daemon watching `DevToolsActivePort` and `dist/theme_payload.js`.
-- `scripts/install-win.ps1`, `scripts/install-unix.sh`, `scripts/uninstall.js`, `scripts/verify_cdp.js` — OS setup, removal, and live CDP verification.
+- `themes/themes.json` — Theme presets (colors, wallpaper/video paths, SVG ornaments, glass alpha/saturation defaults).
+- `themes/assets/` — Raster wallpapers (`.webp`/`.png`/`.jpg`), live MP4 videos, SVG stickers/corner flourishes, Boot Starfield & Tawa Voice/Mali fonts.
+- `engine/core.js` — Standalone DOM + CSS injection engine (Zero Live Blur, Zero `:has()`, L-glass layout, split-browser hole cutout, Boot HUD, Sketch Reveal v2, Task Voice, Theme Studio modal).
+- `src/` — Pure-Rust CLI (`agy-theme.exe`) & silent daemon (`agy-theme-daemon.exe`) with integrated Local HTTP Media Server (`127.0.0.1:47821`, streaming `Range 206`, MD5 dedup).
+- `agy-theme.bat`, `scripts/install-win.ps1`, `scripts/install-unix.sh` — Interactive Windows launcher & cross-platform Task Scheduler / LaunchAgent / systemd wrappers.
 - `references/theme-schema.md` — Exact `themes.json` schema, contrast rules, and Antigravity selector notes.
 
 ## Workflow
@@ -30,21 +29,21 @@ Creates and applies custom glassmorphic themes (wallpapers, cohesive palettes, c
 3. **Stage assets & edit `themes/themes.json`**
    - Save wallpaper under `themes/assets/<slug>.webp` (or `.png`), optional SVG stickers/corners, and optional `userAvatar` / `agentAvatar` files under `themes/assets/`.
    - Add a new entry in `themes/themes.json` referencing `"assets/<filename>"` (keep existing sample presets unless asked to remove them).
-   - Never hardcode personal OS paths (`C:\Users\...`, `/Users/...`, `/home/...`) in JSON, JS, or scripts.
+   - Never hardcode personal OS paths (`C:\Users\...`, `/Users/...`, `/home/...`) in JSON, JS, Rust, or scripts.
 4. **Compile & syntax-check payload**
-   - Run `python scripts/build_payload.py` (or `python3 scripts/build_payload.py`).
+   - Run `.\target\release\agy-theme.exe build` (or `cargo build --release` first if binaries are missing).
    - Run `node --check dist/theme_payload.js` to ensure zero syntax issues.
 5. **Run / hot-reload daemon**
-   - **Windows:** `powershell -ExecutionPolicy Bypass -File scripts/install-win.ps1`
+   - **Windows:** `.\target\release\agy-theme.exe install` (or `agy-theme.bat install` / `powershell -ExecutionPolicy Bypass -File scripts/install-win.ps1`)
    - **macOS / Linux:** `bash scripts/install-unix.sh` (or `--foreground` for interactive testing)
-   - If the daemon is already running, rebuilding `dist/theme_payload.js` triggers automatic hot-reload via `fs.watch`.
+   - If the daemon is already running, rebuilding `dist/theme_payload.js` triggers automatic hot-reload via `(modified, len)` stamp check.
 6. **Verify live via CDP**
-   - Run `node scripts/verify_cdp.js` while Antigravity is open.
-   - Confirm `themeActive: true`, `hasLiveBlurRule: false`, valid `.agy-shell` background, and readable composer pills before reporting success.
+   - Run `.\target\release\agy-theme.exe verify` while Antigravity is open.
+   - Confirm `themeActive: true`, `hasLiveBlurRule: false`, `hasSelectorCount: 0`, `settingsTriggerPresent: true`, valid `.agy-shell` background, and readable composer pills before reporting success.
 
 ## Non-Negotiable Architecture Rules
 
-- **Zero Live Blur:** Never add CSS `backdrop-filter: blur(...)` to `.agy-shell`, `.agy-chat-frame`, or scrollable panes — Electron scrolling drops frames badly under live blur. `engine/core.js` pre-bakes blurred canvas textures (`syncPrebakedGlass`) instead.
+- **Zero Live Blur & Zero `:has()`:** Never add CSS `backdrop-filter: blur(...)` to `.agy-shell`, `.agy-chat-frame`, modals, or scrollable panes, and never add CSS `:has()` selectors — Electron scrolling drops frames badly under live blur or `:has()`. `engine/core.js` pre-bakes blurred canvas textures (`syncPrebakedGlass`) instead.
 - **Data-Only Theme Authoring:** Add themes in `themes/themes.json` + `themes/assets/`. Leave `engine/core.js` untouched unless Antigravity changes its upstream DOM selectors.
 - **Split Browser Cutout:** Never paint opaque overlays over the right-side browser pane; keep `data-has-browser-hole` + `evenodd` `clip-path` behavior intact so embedded Chromium views stay sharp.
 - **No Personal Data Leakage:** Check modified files for absolute user paths or personal `theme_config.json` state before committing.
