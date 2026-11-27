@@ -11,7 +11,8 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
   } = ctx;
   function mountBootSequence(forceReplay = false) {
     const st = getState();
-    if (!forceReplay && (!st.bootIntro || window.__AGY_BOOT_PLAYED__)) {
+    // core.js already sets __AGY_BOOT_PLAYED__ before loading this module, so only check the setting here.
+    if (!forceReplay && !st.bootIntro) {
       return;
     }
     window.__AGY_BOOT_PLAYED__ = true;
