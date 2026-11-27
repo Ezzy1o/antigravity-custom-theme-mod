@@ -273,30 +273,30 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
         </div>
 
         <div class="agy-boot-stage" id="agy-stage-1">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">YÊU CẦU QUYỀN TRUY CẬP</span></div>
+          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">SYSTEM ACCESS</span></div>
           <div class="agy-hud-subtitle" data-stagger="14">ACCESS PERMISSION REQUIRED</div>
           <button class="agy-hud-btn" id="agy-btn-grant" type="button">
-            <span>CẤP QUYỀN &nbsp; GRANT ACCESS</span>
+            <span>GRANT ACCESS</span>
           </button>
-          <div class="agy-hud-hint">Nhấn Enter / Space hoặc bấm nút để tiếp tục</div>
+          <div class="agy-hud-hint">Press Enter / Space or click the button to continue</div>
         </div>
 
         <div class="agy-boot-stage" id="agy-stage-2">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">XÁC MINH DANH TÍNH</span></div>
+          <div style="margin-bottom:6px"><span class="agy-hud-title" data-stagger="26">IDENTITY CHECK</span></div>
           <div class="agy-hud-subtitle" data-stagger="14">IDENTITY VERIFICATION</div>
           <div class="agy-id-table">
-            <div class="agy-id-row"><span>TÊN TRUY CẬP / OPERATOR</span><span>SENSEI</span></div>
-            <div class="agy-id-row"><span>MÃ ĐỊNH DANH / UID</span><span>0042</span></div>
-            <div class="agy-id-row"><span>CẤP QUYỀN / LEVEL</span><span>∞</span></div>
+            <div class="agy-id-row"><span>OPERATOR</span><span>SENSEI</span></div>
+            <div class="agy-id-row"><span>UID</span><span>0042</span></div>
+            <div class="agy-id-row"><span>ACCESS LEVEL</span><span>∞</span></div>
           </div>
           <button class="agy-hud-btn" id="agy-btn-confirm" type="button">
-            <span>XÁC NHẬN &nbsp; CONFIRM IDENTITY</span>
+            <span>CONFIRM IDENTITY</span>
           </button>
-          <div class="agy-hud-hint">Nhấn Enter / Space hoặc bấm nút để xác nhận</div>
+          <div class="agy-hud-hint">Press Enter / Space or click the button to confirm</div>
         </div>
 
         <div class="agy-boot-stage" id="agy-stage-morph">
-          <div style="margin-bottom:6px"><span class="agy-hud-title" id="agy-morph-title" data-stagger="16">ĐANG TIẾP NHẬN YÊU CẦU</span></div>
+          <div style="margin-bottom:6px"><span class="agy-hud-title" id="agy-morph-title" data-stagger="16">PROCESSING REQUEST</span></div>
           <div class="agy-hud-subtitle" id="agy-morph-sub" data-stagger="10" style="margin-bottom:10px">ACCESS REQUEST RECEIVED</div>
           <div class="agy-icon-morph-box">
             <svg class="agy-icon-outline-svg" id="agy-icon-outline-svg" viewBox="0 0 256 256">
@@ -336,7 +336,7 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
               <div class="agy-orbit-dot w" style="bottom:24%;right:28%"></div>
             </div>
             <div>
-              <div class="agy-hud-title" data-stagger="24" style="font-size:17px;letter-spacing:0.1em;margin-bottom:6px">HOÀN TẤT · ĐÃ XÁC THỰC</div>
+              <div class="agy-hud-title" data-stagger="24" style="font-size:17px;letter-spacing:0.1em;margin-bottom:6px">COMPLETE · VERIFIED</div>
               <div class="agy-hud-subtitle" data-stagger="14" style="margin-bottom:0;font-size:9px;letter-spacing:0.24em">READ COMPLETE · VERIFIED</div>
             </div>
           </div>
@@ -349,7 +349,7 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
             <img src="${iconColorUrl}" alt="Antigravity" />
           </div>
           <div class="agy-dot-grid-small agy-welcome-reveal" style="margin-bottom:8px;animation-delay:460ms">A N T I G R A V I T Y</div>
-          <div class="agy-hud-hint agy-welcome-reveal" style="color:#a1a1aa;letter-spacing:0.2em;animation-delay:540ms">CHÀO MỪNG SENSEI • SESSION READY</div>
+          <div class="agy-hud-hint agy-welcome-reveal" style="color:#a1a1aa;letter-spacing:0.2em;animation-delay:540ms">WELCOME BACK, SENSEI • SESSION READY</div>
         </div>
       </div>
 
@@ -521,8 +521,8 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
     }
 
     function runAutoSequenceAfterConfirm() {
-      morphTitle.dataset.rawText = 'ĐANG TIẾP NHẬN YÊU CẦU';
-      morphTitle.textContent = 'ĐANG TIẾP NHẬN YÊU CẦU';
+      morphTitle.dataset.rawText = 'PROCESSING REQUEST';
+      morphTitle.textContent = 'PROCESSING REQUEST';
       morphSub.dataset.rawText = 'ACCESS REQUEST RECEIVED';
       morphSub.textContent = 'ACCESS REQUEST RECEIVED';
       iconOutlineSvg.classList.remove('fade-stroke');
@@ -540,8 +540,8 @@ window.__AGY_LAZY_BOOT__ = function(ctx, forceReplay = false) {
         fillPhaseStarted = true;
 
         // Fill immediately on stroke completion while swapping the caption concurrently
-        morphTitle.dataset.rawText = 'BẮT ĐẦU ĐỌC QUYỀN HẠN';
-        morphTitle.textContent = 'BẮT ĐẦU ĐỌC QUYỀN HẠN';
+        morphTitle.dataset.rawText = 'READING PERMISSIONS';
+        morphTitle.textContent = 'READING PERMISSIONS';
         morphSub.dataset.rawText = 'PERMISSION READ STARTED';
         morphSub.textContent = 'PERMISSION READ STARTED';
         showStage(4, true);
