@@ -307,7 +307,34 @@ fn run_session_loop(
         echo_stdout,
     );
 
+    // Watchdog: during app startup the page can still be loading or swapping documents when the
+    // first injection lands, leaving the window unthemed. Re-check a few times after attach and
+    // re-inject if the theme <style> element is missing.
+    const THEME_CHECK_EXPR: &str =
+        "Boolean(document.getElementById('antigravity-custom-theme-active'))";
+    const THEME_CHECK_SCHEDULE_SECS: [u64; 4] = [3, 8, 15, 30];
+    let attached_at = Instant::now();
+    let mut theme_checks_done: usize = 0;
+    let mut pending_theme_check_id: Option<u64> = None;
+
     while !SHUTDOWN.load(Ordering::Relaxed) {
+        if pending_theme_check_id.is_none()
+            && theme_checks_done < THEME_CHECK_SCHEDULE_SECS.len()
+            && attached_at.elapsed()
+                >= Duration::from_secs(THEME_CHECK_SCHEDULE_SECS[theme_checks_done])
+        {
+            theme_checks_done += 1;
+            match send_cdp(
+                &mut ws,
+                &mut next_id,
+                "Runtime.evaluate",
+                json!({ "expression": THEME_CHECK_EXPR, "returnByValue": true }),
+            ) {
+                Ok(id) => pending_theme_check_id = Some(id),
+                Err(_) => return,
+            }
+        }
+
         loop {
             match rx.try_recv() {
                 Ok(SessionCmd::Reinject) => {
@@ -352,6 +379,36 @@ fn run_session_loop(
                 };
 
                 if let Some(id) = msg.get("id").and_then(Value::as_u64) {
+                    if pending_theme_check_id == Some(id) {
+                        pending_theme_check_id = None;
+                        let themed = msg
+                            .pointer("/result/result/value")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        if !themed {
+                            append_log(
+                                &paths.log_file,
+                                &format!(
+                                    "Theme missing on {} (check {}/{}); re-injecting.",
+                                    target.id,
+                                    theme_checks_done,
+                                    THEME_CHECK_SCHEDULE_SECS.len()
+                                ),
+                                echo_stdout,
+                            );
+                            if inject_full(
+                                &mut ws,
+                                &mut next_id,
+                                &mut doc_script_id,
+                                &mut pending_doc_script_call_id,
+                            )
+                            .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
                     if pending_doc_script_call_id == Some(id) {
                         pending_doc_script_call_id = None;
                         if let Some(ident) = msg.pointer("/result/identifier").and_then(Value::as_str)
