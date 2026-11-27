@@ -1,95 +1,116 @@
 # Antigravity Custom Theme Mod — Tawa Rust Edition
 
-Trình tùy biến giao diện nền động, màn hình khởi động và hiệu ứng kính mờ dựng sẵn cho **Antigravity** mà không can thiệp vào tệp cài đặt gốc (`app.asar`) của ứng dụng. Phiên bản **Tawa Rust Edition** thay thế hoàn toàn daemon Node.js, trình đóng gói Python và script VBS bằng hai tệp thực thi native (`agy-theme.exe` và `agy-theme-daemon.exe`) dùng bộ nhớ thấp và nạp tài nguyên theo nhu cầu (**Lazy HTTP**).
+A prebuilt customizer that adds dynamic backgrounds, a boot screen and frosted-glass effects to **Antigravity** without touching the app's original installation file (`app.asar`). The **Tawa Rust Edition** completely replaces the Node.js daemon, the Python bundler and the VBS script with two native executables (`agy-theme.exe` and `agy-theme-daemon.exe`) that use very little memory and load assets on demand (**Lazy HTTP**).
 
-![Minh họa giao diện Antigravity Custom Theme](docs/demo.webp)
+![Antigravity Custom Theme demo](docs/demo.webp)
 
-> Mã nguồn này được phát triển và mở rộng dựa trên dự án mã nguồn mở [antigravity-custom-theme-skill](https://github.com/giakiet22102006/antigravity-custom-theme-skill) (giấy phép MIT).
-
----
-
-## Giới thiệu kiến trúc
-
-Hệ thống vận hành theo mô hình hai lớp tách biệt nhằm giữ ổn định khi Antigravity cập nhật phiên bản mới:
-
-1. **Daemon nền & HTTP Media Server Rust (`src/daemon.rs`, `src/media.rs`, `agy-theme-daemon.exe`):**
-   - Biên dịch với `windows_subsystem = "windows"` nên chạy ngầm không cửa sổ console, không cần `Node.js`, `Python` hay `wscript.exe`.
-   - Tự động dò tệp `DevToolsActivePort` của Antigravity, chỉ gắn vào các trang giao diện hợp lệ (`https://127.0.0.1:*`, `workbench`, `launchpad`) và bỏ qua hoàn toàn dev server cục bộ (`http://127.0.0.1:*`).
-   - Bật `Page.setBypassCSP({ enabled: true })`, bỏ `Runtime.enable` để giảm giữ tham chiếu heap V8, dọn `Page.removeScriptToEvaluateOnNewDocument` cũ trước khi nạp lại.
-   - Mở HTTP Media Server cục bộ bằng `std::net::TcpListener` trên `127.0.0.1:47821` (hoặc `AGY_MEDIA_PORT`) phục vụ `/assets/*` và `/user_media/*` theo luồng 64 KiB, hỗ trợ `Range 206` cho video, `Cache-Control: public, max-age=86400`, `/user_media_list`, `POST /upload` (băm MD5 theo luồng 64 KiB chống trùng) và `POST /delete_media`.
-   - Theo dõi `dist/theme_payload.js` theo cặp `(modified, len)` để hot-reload đúng lúc, lưu thiết lập qua `Runtime.addBinding` (`agySaveThemeConfig`) bằng ghi file atomic vào `theme_config.json` và đồng bộ delta (`skipSave: true`) giữa các cửa sổ.
-
-2. **Bộ máy giao diện runtime (`engine/core.js`) & Trình đóng gói Lazy HTTP (`src/builder.rs`):**
-   - `agy-theme.exe build` trộn `themes/themes.json` + `engine/core.js` thành `dist/theme_payload.js` gọn nhẹ (**278.6 KB**): chỉ nhúng nội tuyến các SVG nhỏ và 3 subset phông Mali WOFF2; toàn bộ ảnh nền, video MP4, starfield, icon và voice được giữ làm đường dẫn tương đối để tải theo nhu cầu qua HTTP Media Server.
-   - `engine/core.js` duy trì **0 `:has()`** toàn cục và **0 live `backdrop-filter: blur(...)`** toàn cục, dùng `ResizeObserver` thay cho polling trong `tick()`, dùng `blob:` URL kèm LRU revoke, tạm dừng `<video>` khi `document.hidden`, và pre-bake lớp kính mờ trên canvas offscreen (`syncPrebakedGlass`).
+> This code is developed and extended from the open-source project [antigravity-custom-theme-skill](https://github.com/giakiet22102006/antigravity-custom-theme-skill) (MIT license).
+>
+> This repository is a fork of [furinamikuvn/antigravity-custom-theme-mod](https://github.com/furinamikuvn/antigravity-custom-theme-mod) with the boot intro and Custom Theme Studio UI translated to English.
 
 ---
 
-## Tính năng chính
+## Notes for this fork (Windows)
 
-- **Chế độ nền Ảnh tĩnh và Video động tách biệt:** Quản lý riêng danh sách ảnh tĩnh và video đã tải lên; tự động lưu lịch sử mỗi khi chọn tệp mới, hỗ trợ xem trước và xóa trực tiếp từng mục khỏi ổ cứng.
-- **Preset mặc định đi kèm:** Bao gồm `Gemini-chan Live` (`themes/assets/wallpapergeminichan.mp4`), `Furina Live` (`themes/assets/furina-bg.mp4`), `WLOP Cosmic` và `Midnight Obsidian`.
-- **Hiệu ứng vẽ nét và loang màu (Sketch Reveal):** Trích xuất đường nét trực tiếp từ khung hình video hoặc ảnh nền hiện tại qua thuật toán biên cạnh đa kênh màu kết hợp làm mượt đường cong.
-- **Màn hình khởi động (Boot HUD):** Giao diện khởi động Starfield kèm 4 đoạn voice Arisu-Tawa, có thể bật/tắt hoặc phát lại từ bảng cài đặt.
-- **Câu chào tùy chỉnh (Custom Greeting):** Cho phép tự soạn danh sách câu chào ngẫu nhiên hiển thị trên màn hình hội thoại trống bằng bộ phông chữ viết tay Mali đóng gói ngoại tuyến.
-- **Âm thanh báo hoàn thành tác vụ (Task Voice):** Hỗ trợ nạp nhiều tệp âm thanh (`.mp3`, `.wav`, `.ogg`, `.m4a`, `.aac`, `.flac`), phát ngẫu nhiên khi tác vụ kết thúc và giải phóng đối tượng âm thanh ngay sau khi phát xong.
-- **Tùy biến khung chat và ảnh đại diện:** Thay đổi khung nhập liệu, bong bóng tin nhắn, ảnh đại diện User/Agent (tự nén WebP), độ tối nền và độ mờ kính.
+Lessons learned while setting this up on Windows:
+
+- **Works with the Antigravity App (2.0) only, not Antigravity IDE.** The theme targets the Agent Manager UI (composer, project pill, chat greeting). In the VS Code–based IDE, `verify` may report `PASS` but nothing changes (`shellFound: false`, `settingsTriggerPresent: false`).
+- **Add the debug flag to the shortcut yourself if `install` doesn't.** Check with:
+  ```powershell
+  $sh = New-Object -ComObject WScript.Shell
+  foreach ($s in "$env:USERPROFILE\Desktop\Antigravity.lnk", "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Antigravity.lnk") {
+    $l = $sh.CreateShortcut($s); $l.Arguments = '--remote-debugging-port=0'; $l.Save()
+  }
+  ```
+  App updates can rewrite the shortcut and remove the flag — re-run this if the theme disappears.
+- **Always launch Antigravity from that shortcut**, never from an Administrator shell. An admin-launched instance can't be controlled by the daemon and can break auto-updates.
+- **Port file location.** The daemon looks for `%APPDATA%\Antigravity\DevToolsActivePort`. If your app stores it elsewhere, point the daemon to it with the `AGY_PORT_FILE` environment variable, then restart the daemon (`agy-theme.exe stop` / `start`).
+- **Building from source on Windows** needs Rust (`winget install Rustlang.Rustup`) and Visual Studio Build Tools with the **Desktop development with C++** workload, otherwise `cargo build` fails with `link.exe not found`.
 
 ---
 
-## Yêu cầu hệ thống
+## Architecture overview
 
-- **Antigravity** đang hoạt động với cổng gỡ lỗi CDP (`DevToolsActivePort`; lệnh `install` tự động gắn cờ `--remote-debugging-port=0` vào shortcut nếu thiếu).
-- **Để chạy trực tiếp trên Windows / macOS / Linux:** Chỉ cần binary trong `target/release/` (`agy-theme.exe` + `agy-theme-daemon.exe`) — **không cần Node.js hay Python khi vận hành**.
-- **Chỉ cần Rust toolchain (`cargo` / `rustc`) khi tự biên dịch lại từ mã nguồn.**
+The system runs on two separate layers so it stays stable when Antigravity updates:
+
+1. **Rust background daemon & HTTP media server (`src/daemon.rs`, `src/media.rs`, `agy-theme-daemon.exe`):**
+   - Compiled with `windows_subsystem = "windows"`, so it runs in the background with no console window and needs no `Node.js`, `Python` or `wscript.exe`.
+   - Automatically detects Antigravity's `DevToolsActivePort` file and attaches only to valid UI pages (`https://127.0.0.1:*`, `workbench`, `launchpad`), completely ignoring local dev servers (`http://127.0.0.1:*`).
+   - Enables `Page.setBypassCSP({ enabled: true })`, drops `Runtime.enable` to reduce retained V8 heap references, and cleans up old `Page.removeScriptToEvaluateOnNewDocument` entries before reloading.
+   - Starts a local HTTP media server with `std::net::TcpListener` on `127.0.0.1:47821` (or `AGY_MEDIA_PORT`) serving `/assets/*` and `/user_media/*` as 64 KiB streams, with `Range 206` support for video, `Cache-Control: public, max-age=86400`, `/user_media_list`, `POST /upload` (streaming 64 KiB MD5 hashing to prevent duplicates) and `POST /delete_media`.
+   - Watches `dist/theme_payload.js` by its `(modified, len)` pair to hot-reload at the right moment, saves settings through `Runtime.addBinding` (`agySaveThemeConfig`) with atomic writes to `theme_config.json`, and syncs deltas (`skipSave: true`) across windows.
+
+2. **Runtime UI engine (`engine/core.js`) & Lazy HTTP bundler (`src/builder.rs`):**
+   - `agy-theme.exe build` merges `themes/themes.json` + `engine/core.js` into a compact `dist/theme_payload.js` (**278.6 KB**): only small SVGs and 3 Mali WOFF2 font subsets are inlined; all wallpapers, MP4 videos, starfield, icons and voice files are kept as relative paths and loaded on demand from the HTTP media server.
+   - `engine/core.js` keeps **0 global `:has()`** selectors and **0 global live `backdrop-filter: blur(...)`**, uses `ResizeObserver` instead of polling in `tick()`, uses `blob:` URLs with LRU revocation, pauses `<video>` when `document.hidden`, and pre-bakes the frosted-glass layer on an offscreen canvas (`syncPrebakedGlass`).
 
 ---
 
-## Hướng dẫn cài đặt và sử dụng
+## Key features
 
-### Cách nhanh nhất trên Windows: Launcher tương tác
+- **Separate static image and live video background modes:** Manage uploaded images and videos separately; history is saved automatically every time you pick a new file, with preview and per-item deletion from disk.
+- **Bundled default presets:** Includes `Gemini-chan Live` (`themes/assets/wallpapergeminichan.mp4`), `Furina Live` (`themes/assets/furina-bg.mp4`), `WLOP Cosmic` and `Midnight Obsidian`.
+- **Sketch Reveal effect:** Extracts line art directly from the current video frame or wallpaper using a multi-channel color edge-detection algorithm combined with curve smoothing.
+- **Boot HUD:** A starfield boot sequence with 4 Arisu-Tawa voice clips that can be toggled or replayed from the settings panel.
+- **Custom Greeting:** Write your own list of random greetings shown on the empty chat screen, rendered in the bundled offline Mali handwriting font.
+- **Task Voice:** Load multiple audio files (`.mp3`, `.wav`, `.ogg`, `.m4a`, `.aac`, `.flac`), played at random when a task finishes; the audio object is released right after playback.
+- **Chat frame & avatar customization:** Change the input box, message bubbles, User/Agent avatars (auto-compressed to WebP), background dim and glass blur.
 
-Chạy trực tiếp tệp **`agy-theme.bat`** ở thư mục gốc (hoặc gọi từ PowerShell):
+---
+
+## Requirements
+
+- **Antigravity** running with the CDP debug port (`DevToolsActivePort`; the `install` command automatically adds the `--remote-debugging-port=0` flag to the shortcut if missing — see the fork notes above if it doesn't).
+- **To run directly on Windows / macOS / Linux:** Only the binaries in `target/release/` (`agy-theme.exe` + `agy-theme-daemon.exe`) are needed — **no Node.js or Python at runtime**.
+- **The Rust toolchain (`cargo` / `rustc`) is only needed when building from source.**
+
+---
+
+## Installation and usage
+
+### Fastest way on Windows: interactive launcher
+
+Run **`agy-theme.bat`** in the repository root (or call it from PowerShell):
 
 ```powershell
 .\agy-theme.bat install
 ```
 
-Nếu chưa có binary trong `target/release/`, `agy-theme.bat` sẽ tự chạy `cargo build --release` ở lần đầu rồi mở menu hoặc thực thi lệnh tương ứng.
+If there are no binaries in `target/release/` yet, `agy-theme.bat` runs `cargo build --release` on first use, then opens the menu or runs the requested command.
 
-### Cài đặt qua script / CLI trực tiếp
+### Installing via script / CLI
 
-1. **Biên dịch bản Release (nếu tự build từ mã nguồn):**
+1. **Build the release binaries (if building from source):**
 
 ```powershell
 cargo build --release
 ```
 
-2. **Đóng gói `dist/theme_payload.js` (Lazy HTTP):**
+2. **Bundle `dist/theme_payload.js` (Lazy HTTP):**
 
 ```powershell
 .\target\release\agy-theme.exe build
 ```
 
-3. **Cài đặt tự khởi động và bật daemon nền:**
+3. **Set up auto-start and launch the background daemon:**
 
-- **Trên Windows (PowerShell):**
+- **On Windows (PowerShell):**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File ".\scripts\install-win.ps1"
 ```
 
-Lệnh trên gọi `agy-theme.exe install`: gắn cờ `--remote-debugging-port=0` vào shortcut Antigravity nếu thiếu, đăng ký Windows Scheduled Task `AntigravityCustomTheme` (chạy `agy-theme-daemon.exe` khi đăng nhập, có fallback Startup `.lnk` nếu thiếu quyền), đồng thời dọn `silent-start.vbs` cũ.
+This calls `agy-theme.exe install`: adds the `--remote-debugging-port=0` flag to the Antigravity shortcut if missing, registers the Windows Scheduled Task `AntigravityCustomTheme` (runs `agy-theme-daemon.exe` at logon, with a Startup `.lnk` fallback if permissions are insufficient), and removes the old `silent-start.vbs`.
 
-- **Trên macOS / Linux (Bash):**
+- **On macOS / Linux (Bash):**
 
 ```bash
 bash scripts/install-unix.sh
 ```
 
-Hỗ trợ `install` (LaunchAgent trên macOS / `systemd --user` trên Linux), `--foreground`, `stop`, `status` và `uninstall`.
+Supports `install` (LaunchAgent on macOS / `systemd --user` on Linux), `--foreground`, `stop`, `status` and `uninstall`.
 
-4. **Kiểm tra trạng thái daemon, RAM và live CDP:**
+4. **Check daemon status, RAM and live CDP:**
 
 ```powershell
 .\target\release\agy-theme.exe status
@@ -97,13 +118,13 @@ Hỗ trợ `install` (LaunchAgent trên macOS / `systemd --user` trên Linux), `
 .\target\release\agy-theme.exe themes
 ```
 
-Kết quả đạt yêu cầu của `verify` sẽ báo `PASS` kèm `themeActive: true`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `settingsTriggerPresent: true` và `composerPresent: true`. Để mở bảng tùy chỉnh trong Antigravity, bấm mục **Custom theme** ở thanh bên trái.
+A passing `verify` reports `PASS` with `themeActive: true`, `hasSelectorCount: 0`, `hasLiveBlurRule: false`, `settingsTriggerPresent: true` and `composerPresent: true`. To open the customization panel in Antigravity, click **Custom theme** in the left sidebar.
 
 ---
 
-## Gỡ cài đặt
+## Uninstall
 
-Để dừng daemon nền, gỡ Scheduled Task / LaunchAgent / systemd service và khôi phục giao diện mặc định trên các cửa sổ Antigravity đang mở:
+To stop the background daemon, remove the Scheduled Task / LaunchAgent / systemd service and restore the default look on all open Antigravity windows:
 
 ```powershell
 .\target\release\agy-theme.exe uninstall
@@ -111,65 +132,65 @@ Kết quả đạt yêu cầu của `verify` sẽ báo `PASS` kèm `themeActive:
 
 ---
 
-## Đối chứng hiệu năng thực tế (Node/Python cũ vs Tawa Rust Edition)
+## Real-world performance comparison (old Node/Python vs Tawa Rust Edition)
 
-Số liệu đo trực tiếp trên cùng máy Windows và cửa sổ Antigravity thật (CDP port `53262`):
+Measured directly on the same Windows machine and a real Antigravity window (CDP port `53262`):
 
-| Hạng mục đo | Trước nâng cấp (Node/Python) | Sau nâng cấp (Tawa Rust Edition) | Mức cải thiện |
+| Metric | Before (Node/Python) | After (Tawa Rust Edition) | Improvement |
 | :--- | :--- | :--- | :--- |
-| **Working Set RAM daemon** | `63.06 MB` (P0: `60.71 MB`) | **`1.62 – 1.64 MB`** | Giảm **~38.5×** |
-| **Private Memory daemon** | `86.42 MB` (P0: `80.68 MB`) | **`0.95 – 1.34 MB`** | Giảm **~64.5× – 90.9×** |
-| **`dist/theme_payload.js`** | `1,786,039 bytes` (`1,744.2 KB`) | **`285,252 bytes` (`278.6 KB`)** | Giảm **6.26×** |
-| **Thời gian build payload** | Python script + Pillow | **`1 ms`** (`agy-theme.exe build`) | Tức thì |
-| **`<style>` active (`styleBytes`)** | `53,020 bytes` | **`22,610 bytes`** | Giảm **57.4%** |
-| **CSS `:has()` toàn cục** | `7` rules | **`0`** (`hasSelectorCount: 0`) | Loại bỏ **100%** |
-| **Live `backdrop-filter: blur()`** | `1` (`blur(10px)` ở modal) | **`0`** (`hasLiveBlurRule: false`) | Loại bỏ **100%** |
-| **Nút sidebar `Custom theme`** | `settingsTriggerPresent: false` | **`settingsTriggerPresent: true`** | Khắc phục 100% |
-| **Dung lượng `themes/user_media/`** | `16` file (6 MP4 trùng MD5) | **`10` file** (thu hồi `48.58 MB`) | `0` bản trùng |
+| **Daemon working set RAM** | `63.06 MB` (P0: `60.71 MB`) | **`1.62 – 1.64 MB`** | **~38.5×** lower |
+| **Daemon private memory** | `86.42 MB` (P0: `80.68 MB`) | **`0.95 – 1.34 MB`** | **~64.5× – 90.9×** lower |
+| **`dist/theme_payload.js`** | `1,786,039 bytes` (`1,744.2 KB`) | **`285,252 bytes` (`278.6 KB`)** | **6.26×** smaller |
+| **Payload build time** | Python script + Pillow | **`1 ms`** (`agy-theme.exe build`) | Instant |
+| **Active `<style>` (`styleBytes`)** | `53,020 bytes` | **`22,610 bytes`** | **57.4%** smaller |
+| **Global CSS `:has()`** | `7` rules | **`0`** (`hasSelectorCount: 0`) | **100%** removed |
+| **Live `backdrop-filter: blur()`** | `1` (`blur(10px)` in modal) | **`0`** (`hasLiveBlurRule: false`) | **100%** removed |
+| **`Custom theme` sidebar button** | `settingsTriggerPresent: false` | **`settingsTriggerPresent: true`** | 100% fixed |
+| **`themes/user_media/` size** | `16` files (6 MP4s with duplicate MD5) | **`10` files** (`48.58 MB` reclaimed) | `0` duplicates |
 
 ---
 
-## Cấu trúc thư mục
+## Directory structure
 
 ```text
 .
 ├── src/
-│   ├── lib.rs                 # Thư viện agy_theme và UTC timestamp helper
-│   ├── main.rs                # CLI agy-theme (build, daemon, start, stop, status, install, uninstall, verify, themes)
-│   ├── bin/daemon.rs          # Binary chạy ngầm không cửa sổ agy-theme-daemon
-│   ├── builder.rs             # Trình đóng gói Lazy HTTP payload (themes.json + core.js -> dist/theme_payload.js)
-│   ├── media.rs               # HTTP Media Server thuần std::net (Range 206, upload MD5 64 KiB, delete_media)
-│   ├── daemon.rs              # Vòng lặp quản lý CDP sessions, watch file theo (mtime, size), delta sync
-│   ├── cdp.rs                 # HTTP /json, filter target Antigravity, evaluate_once, verify_live
-│   ├── ws.rs                  # RFC 6455 WebSocket client thuần Rust (SHA-1 + masked frame 8 KiB)
-│   ├── config.rs              # Đọc/ghép atomic theme_config.json và xoay vòng daemon.log
-│   ├── installer.rs           # Cài/gỡ Task Scheduler, shortcut CDP flag, LaunchAgent / systemd
-│   ├── md5.rs                 # RFC 1321 MD5 thuần Rust đọc luồng 64 KiB
-│   ├── paths.rs               # Tự dò root, DevToolsActivePort và sibling binaries
+│   ├── lib.rs                 # agy_theme library and UTC timestamp helper
+│   ├── main.rs                # agy-theme CLI (build, daemon, start, stop, status, install, uninstall, verify, themes)
+│   ├── bin/daemon.rs          # Windowless background binary agy-theme-daemon
+│   ├── builder.rs             # Lazy HTTP payload bundler (themes.json + core.js -> dist/theme_payload.js)
+│   ├── media.rs               # Pure std::net HTTP media server (Range 206, 64 KiB MD5 upload, delete_media)
+│   ├── daemon.rs              # CDP session loop, file watching by (mtime, size), delta sync
+│   ├── cdp.rs                 # HTTP /json, Antigravity target filter, evaluate_once, verify_live
+│   ├── ws.rs                  # Pure Rust RFC 6455 WebSocket client (SHA-1 + 8 KiB masked frames)
+│   ├── config.rs              # Atomic read/merge of theme_config.json and daemon.log rotation
+│   ├── installer.rs           # Install/remove Task Scheduler, CDP shortcut flag, LaunchAgent / systemd
+│   ├── md5.rs                 # Pure Rust RFC 1321 MD5 with 64 KiB streaming reads
+│   ├── paths.rs               # Auto-detects root, DevToolsActivePort and sibling binaries
 │   └── sys.rs                 # Win32 / Unix PID, memory stats, working-set trim, detached spawn
 ├── tests/
-│   └── integration_tests.rs   # 6 integration test CLI, Lazy HTTP builder, HTTP Range/upload/delete, CDP, config/MD5
+│   └── integration_tests.rs   # 6 integration tests: CLI, Lazy HTTP builder, HTTP Range/upload/delete, CDP, config/MD5
 ├── engine/
-│   └── core.js                # Mã nguồn giao diện runtime (0 :has(), 0 live blur, Boot HUD, Sketch Reveal, Modal)
+│   └── core.js                # Runtime UI source (0 :has(), 0 live blur, Boot HUD, Sketch Reveal, Modal)
 ├── scripts/
-│   ├── install-win.ps1        # Wrapper PowerShell gọi target/release/agy-theme.exe install
-│   └── install-unix.sh        # Wrapper Bash cho macOS / Linux
+│   ├── install-win.ps1        # PowerShell wrapper that calls target/release/agy-theme.exe install
+│   └── install-unix.sh        # Bash wrapper for macOS / Linux
 ├── themes/
-│   ├── themes.json            # Khai báo 4 preset giao diện mặc định
-│   ├── assets/                # Video, poster, phông chữ Mali WOFF2 và âm thanh mặc định
-│   └── user_media/            # Tệp người dùng tải lên
+│   ├── themes.json            # Declares the 4 default theme presets
+│   ├── assets/                # Videos, posters, Mali WOFF2 fonts and default audio
+│   └── user_media/            # User-uploaded files
 ├── docs/
-│   └── demo.webp              # Ảnh động minh họa giao diện cho README
+│   └── demo.webp              # Animated demo image for the README
 ├── references/
-│   └── theme-schema.md        # Tài liệu cấu trúc dữ liệu themes.json
-├── agy-theme.bat              # Trình khởi chạy & menu CLI nhanh trên Windows
-├── Cargo.toml                 # Khai báo crate agy-theme & cấu hình release LTO/opt-level="s"
-├── SKILL.md                   # Đặc tả cấu trúc Skill
-└── LICENSE                    # Giấy phép MIT
+│   └── theme-schema.md        # themes.json data structure reference
+├── agy-theme.bat              # Quick launcher & CLI menu for Windows
+├── Cargo.toml                 # agy-theme crate & release config (LTO / opt-level="s")
+├── SKILL.md                   # Skill structure specification
+└── LICENSE                    # MIT license
 ```
 
 ---
 
-## Giấy phép
+## License
 
-Phát hành theo giấy phép **MIT** — xem chi tiết trong tệp [LICENSE](LICENSE).
+Released under the **MIT** license — see the [LICENSE](LICENSE) file for details.
