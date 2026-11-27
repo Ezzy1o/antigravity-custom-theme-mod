@@ -1147,6 +1147,19 @@
         background-color: transparent !important;
         background-image: none !important;
       }
+      /* Matte dropdowns / menus / popovers so text stays readable over the wallpaper (no live blur) */
+      [role="menu"],
+      [role="listbox"],
+      [data-radix-menu-content],
+      [data-radix-popper-content-wrapper] > [data-side],
+      .agy-shell .bg-sidebar .surface-opaque.border-menu-border.bg-sidebar,
+      .agy-shell .surface-opaque.border-menu-border.shadow-lg,
+      .agy-shell [data-browser-occluder="true"].surface-opaque.bg-sidebar {
+        background-color: rgba(14, 16, 22, 0.94) !important;
+        background-image: none !important;
+        border: 1px solid rgba(255, 255, 255, 0.10) !important;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55) !important;
+      }
       /* Browser split-pane hole cutout: keep wallpaper & L-glass visible outside [data-browser-hole] without covering live BrowserView */
       ${isVideoMode ? '' : `
       body[data-has-browser-hole="true"] .agy-shell[data-agy-hole-active="1"]::after {
