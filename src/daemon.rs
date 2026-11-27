@@ -396,6 +396,21 @@ fn run_session_loop(
                                 ),
                                 echo_stdout,
                             );
+                            // The failed first injection may already have marked the boot intro
+                            // as played; clear that so the intro runs on this re-injection.
+                            if send_cdp(
+                                &mut ws,
+                                &mut next_id,
+                                "Runtime.evaluate",
+                                json!({
+                                    "expression": "if (!document.getElementById('agy-boot-overlay')) { window.__AGY_BOOT_PLAYED__ = false; window.__AGY_BOOT_FINISHED__ = false; }",
+                                    "awaitPromise": false
+                                }),
+                            )
+                            .is_err()
+                            {
+                                return;
+                            }
                             if inject_full(
                                 &mut ws,
                                 &mut next_id,
@@ -601,7 +616,7 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
             }
         }
 
-        if last_scan.elapsed() >= Duration::from_millis(1500) {
+        if last_scan.elapsed() >= Duration::from_millis(400) {
             last_scan = Instant::now();
             if let Some(info) = read_port_info() {
                 if last_port.is_some() && last_port != Some(info.port) {
@@ -646,7 +661,8 @@ pub fn run(opts: DaemonOptions) -> Result<()> {
             }
         }
 
-        let sleep_ms = if opts.watch_themes { 250 } else { 1000 };
+        // Short sleep so new Antigravity windows are found quickly (less flash of the stock UI).
+        let sleep_ms = 250;
         thread::sleep(Duration::from_millis(sleep_ms));
     }
 

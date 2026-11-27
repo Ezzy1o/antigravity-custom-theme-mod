@@ -956,6 +956,19 @@
     if (fl) fl.remove();
     const st = document.getElementById('agy-boot-styles');
     if (st) st.remove();
+    const pc = document.getElementById('agy-boot-precover');
+    if (pc) pc.remove();
+  }
+
+  // Black cover shown immediately while boot.js is fetched, so the stock UI doesn't flash
+  // before the intro appears. Removed by teardownBootOverlay() when the intro mounts.
+  function showBootPrecover() {
+    if (document.getElementById('agy-boot-precover') || !document.body) return;
+    const pc = document.createElement('div');
+    pc.id = 'agy-boot-precover';
+    pc.style.cssText = 'position:fixed;inset:0;z-index:2147482999;background:#000;pointer-events:none;';
+    document.body.appendChild(pc);
+    setTimeout(() => { const el = document.getElementById('agy-boot-precover'); if (el) el.remove(); }, 6000);
   }
 
   function mountBootSequence(forceReplay = false) {
@@ -964,9 +977,12 @@
       return;
     }
     window.__AGY_BOOT_PLAYED__ = true;
+    if (!forceReplay) showBootPrecover();
     loadLazyModule('boot')
       .then((fn) => { if (typeof fn === 'function') fn(window.__AGY_INTERNAL__, forceReplay); })
       .catch(() => {
+        const pc = document.getElementById('agy-boot-precover');
+        if (pc) pc.remove();
         window.__AGY_BOOT_FINISHED__ = true;
         scheduleRevealWhenReady(true);
       });
