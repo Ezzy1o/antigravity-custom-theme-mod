@@ -10,6 +10,18 @@ A prebuilt customizer that adds dynamic backgrounds, a boot screen and frosted-g
 
 ---
 
+## Changes in this fork
+
+| Change | Files |
+| :--- | :--- |
+| Boot intro and Custom Theme Studio UI translated from Vietnamese to English | `engine/boot.js`, `engine/studio.js`, `README.md` |
+| **Fix:** boot intro never auto-played. `core.js` marks `__AGY_BOOT_PLAYED__` before loading `boot.js`, and `boot.js` then checked the same flag and exited. `boot.js` now only checks the Boot Intro setting. | `engine/boot.js` |
+| **Fix:** theme sometimes missing after a cold start. A post-attach watchdog checks for the theme style at 3 / 8 / 15 / 30 s and re-injects if it is missing (logged as `Theme missing on ... re-injecting.`). | `src/daemon.rs` |
+| Less flash of the stock UI before the intro: the daemon scans for new windows every 0.4 s (was 1.5 s, with a 1 s loop sleep), and `core.js` shows a black cover while `boot.js` loads (auto-removed after 6 s as a safety net). | `src/daemon.rs`, `engine/core.js` |
+| `tools/boot-probe.js`: read-only CDP probe that prints boot-intro state for every Antigravity page. Run with `node tools/boot-probe.js` (Node 22+). | `tools/boot-probe.js` |
+
+---
+
 ## Notes for this fork (Windows)
 
 Lessons learned while setting this up on Windows:
